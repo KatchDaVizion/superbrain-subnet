@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+*.egg
+.eggs/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Node
+node_modules/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Bittensor wallets & keys
+.bittensor/
+wallets/
+*.key
+*.pem
+coldkey*
+hotkey*
+
+# Environment & secrets
+.env
+.env.*
+
+# Logs
+*.log
+logs/
+
+# State files
+state.npz
+
+# Reference repos (large, not part of subnet code)
+reference-repos/
+
+# Zip & large binary files
+*.zip
+*.pdf
+*.pptx
+
+# Claude Code
+.claude/

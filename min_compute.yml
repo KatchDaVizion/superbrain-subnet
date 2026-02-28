@@ -1,0 +1,12 @@
+min_compute:
+  gpu:
+    required: false
+  cpu:
+    min_cores: 4
+    min_speed: 2.5  # GHz
+  ram:
+    min_ram: 8  # GB
+  hard_disk:
+    min_space: 20  # GB
+  network:
+    min_bandwidth: 10  # Mbps
