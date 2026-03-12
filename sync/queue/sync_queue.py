@@ -169,6 +169,35 @@ class SyncQueue:
         )
         return [self._row_to_chunk(row) for row in cursor.fetchall()]
 
+    def get_all_chunks(self, limit: int = 500) -> List[KnowledgeChunk]:
+        """Get all public chunks regardless of sync status, newest first."""
+        cursor = self.conn.execute(
+            """SELECT content_hash, content, origin_node_id, timestamp,
+                      signature, shared_at, metadata
+               FROM public_chunks
+               ORDER BY shared_at DESC
+               LIMIT ?""",
+            (limit,),
+        )
+        return [self._row_to_chunk(row) for row in cursor.fetchall()]
+
+    def get_random_chunks(self, limit: int = 10) -> List[KnowledgeChunk]:
+        """Get random public chunks for query generation."""
+        cursor = self.conn.execute(
+            """SELECT content_hash, content, origin_node_id, timestamp,
+                      signature, shared_at, metadata
+               FROM public_chunks
+               ORDER BY RANDOM()
+               LIMIT ?""",
+            (limit,),
+        )
+        return [self._row_to_chunk(row) for row in cursor.fetchall()]
+
+    def chunk_count(self) -> int:
+        """Return total number of public chunks in the queue."""
+        cursor = self.conn.execute("SELECT COUNT(*) FROM public_chunks")
+        return cursor.fetchone()[0]
+
     def remove_from_queue(self, content_hash: str) -> bool:
         """
         Remove a chunk from the public queue (revoke sharing).

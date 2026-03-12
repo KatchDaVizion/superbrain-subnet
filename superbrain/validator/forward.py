@@ -7,9 +7,13 @@
 #   3. Send to miners via dendrite
 #   4. Score responses with get_rewards()
 #   5. Update scores via self.update_scores()
+#
+# Dynamic Knowledge: Pulls chunks from sync_queue when available.
+# Falls back to static KNOWLEDGE_BASE when sync_queue is empty.
 
-import time
 import random
+import time
+
 import bittensor as bt
 
 from superbrain.protocol import RAGSynapse
@@ -18,10 +22,9 @@ from superbrain.utils.uids import get_random_uids
 
 
 # =====================================================================
-# PROTOTYPE KNOWLEDGE BASE — Static queries for testnet demonstration.
-# Production validators MUST maintain curated, rotating ground-truth
-# datasets. Static queries allow answer caching by gaming miners.
-# This is acknowledged in the README's Known Limitations section.
+# STATIC KNOWLEDGE BASE — Fallback when sync_queue has no chunks yet.
+# Once miners sync real knowledge, the validator builds queries from
+# synced chunks instead. Static KB also seeds challenge queries.
 # =====================================================================
 
 KNOWLEDGE_BASE = [
@@ -86,6 +89,49 @@ CHALLENGE_QUERIES = [
     },
 ]
 
+# Query templates for generating questions from synced chunks
+_QUERY_TEMPLATES = [
+    "Based on the following information, what are the key concepts discussed?",
+    "Summarize the main points from the provided context.",
+    "What is the most important information in the given sources?",
+    "Explain the concepts described in the provided documents.",
+    "What conclusions can be drawn from the provided information?",
+]
+
+# Minimum chunks needed to build a dynamic query
+MIN_CHUNKS_FOR_DYNAMIC = 2
+
+
+def _build_dynamic_query(chunks):
+    """
+    Build a RAG query from synced knowledge chunks.
+
+    Selects 2-4 random chunks and generates a query template.
+    Returns (query, selected_chunks, sources) or None if not enough chunks.
+    """
+    if len(chunks) < MIN_CHUNKS_FOR_DYNAMIC:
+        return None
+
+    # Pick 2-4 chunks (or all if fewer available)
+    n_select = min(random.randint(2, 4), len(chunks))
+    selected = random.sample(chunks, n_select)
+
+    # Extract text content for context
+    chunk_texts = [c.content for c in selected]
+
+    # Build source labels from metadata or origin_node_id
+    sources = []
+    for c in selected:
+        src = c.metadata.get("source_file", "") if c.metadata else ""
+        if not src:
+            src = f"chunk_{c.content_hash[:8]}"
+        sources.append(src)
+
+    # Select query template
+    query = random.choice(_QUERY_TEMPLATES)
+
+    return query, chunk_texts, sources
+
 
 async def forward(self):
     """
@@ -93,7 +139,7 @@ async def forward(self):
 
     Follows the exact template pattern:
       1. Select random miner UIDs
-      2. Build query synapse
+      2. Build query synapse (dynamic from sync_queue, or static fallback)
       3. Query miners via dendrite
       4. Score responses
       5. Update scores
@@ -105,9 +151,11 @@ async def forward(self):
         bt.logging.warning("No available miners to query.")
         return
 
-    # 2. Select query from knowledge base
-    # 20% chance of challenge query for anti-gaming
+    # 2. Select query source
+    # 20% chance of challenge query for anti-gaming (always from static KB)
     is_challenge = random.random() < 0.2
+    use_dynamic = False
+
     if is_challenge and CHALLENGE_QUERIES:
         challenge = random.choice(CHALLENGE_QUERIES)
         kb = KNOWLEDGE_BASE[challenge["kb_index"]]
@@ -116,13 +164,30 @@ async def forward(self):
         sources = kb["sources"]
         expected_keywords = challenge["expected_keywords"]
     else:
-        kb = random.choice(KNOWLEDGE_BASE)
-        query = kb["query"]
-        chunks = kb["chunks"]
-        sources = kb["sources"]
         expected_keywords = []
 
-    bt.logging.info(f"Querying {len(miner_uids)} miners: {query[:60]}...")
+        # Try dynamic query from sync_queue first
+        if hasattr(self, "sync_queue"):
+            try:
+                pool_chunks = self.sync_queue.get_random_chunks(limit=10)
+                dynamic = _build_dynamic_query(pool_chunks)
+                if dynamic is not None:
+                    query, chunks, sources = dynamic
+                    use_dynamic = True
+            except Exception as e:
+                bt.logging.debug(f"Dynamic query failed, using static KB: {e}")
+
+        # Fallback to static knowledge base
+        if not use_dynamic:
+            kb = random.choice(KNOWLEDGE_BASE)
+            query = kb["query"]
+            chunks = kb["chunks"]
+            sources = kb["sources"]
+
+    source_label = "dynamic" if use_dynamic else ("challenge" if is_challenge else "static")
+    bt.logging.info(
+        f"Querying {len(miner_uids)} miners [{source_label}]: {query[:60]}..."
+    )
 
     # 3. Build and send synapse
     synapse = RAGSynapse(
