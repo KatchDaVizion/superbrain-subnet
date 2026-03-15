@@ -15,11 +15,20 @@ from superbrain.protocol import KnowledgeSyncSynapse
 from superbrain.validator.sync_reward import get_sync_rewards
 from superbrain.utils.uids import get_random_uids
 try:
-    from sync.protocol.pool_model import KnowledgeChunk, compute_content_hash, verify_signature
+    from sync.protocol.pool_model import (
+        KnowledgeChunk,
+        compute_content_hash,
+        verify_signature,
+        NodeIdentityRegistry,
+    )
 except ImportError:
     KnowledgeChunk = None
     compute_content_hash = None
     verify_signature = None
+    NodeIdentityRegistry = None
+
+# Global node identity registry for TOFU verification
+_node_registry = NodeIdentityRegistry() if NodeIdentityRegistry else None
 
 # How often to run sync (every N validator steps)
 SYNC_INTERVAL_STEPS = 10
@@ -62,25 +71,44 @@ def _decode_and_validate_batch(batch_data_b64, known_hashes):
         if computed != chunk.content_hash:
             continue
 
-        # Ed25519 signature verification — reject chunks with invalid signatures.
-        # Unsigned chunks (empty signature) are accepted with a logged warning
-        # to allow gradual rollout while miners adopt signing.
-        if chunk.signature and verify_signature is not None:
+        # Ed25519 signature verification — cryptographic enforcement.
+        # Chunks must carry a public_key and a valid signature.
+        if chunk.signature and hasattr(chunk, 'public_key') and chunk.public_key:
+            # Self-certifying verification: verify signature against embedded public key
+            if not chunk.verify_self():
+                bt.logging.warning(
+                    f"Sync: REJECTING chunk {chunk.content_hash[:16]}... — "
+                    f"Ed25519 signature verification FAILED"
+                )
+                continue
+
+            # TOFU check: ensure this node_id hasn't changed public keys
+            if _node_registry is not None:
+                if not _node_registry.check_and_register(chunk.origin_node_id, chunk.public_key):
+                    bt.logging.warning(
+                        f"Sync: REJECTING chunk {chunk.content_hash[:16]}... — "
+                        f"node {chunk.origin_node_id[:8]} changed public key (TOFU violation)"
+                    )
+                    continue
+        elif chunk.signature and not getattr(chunk, 'public_key', ''):
+            # Has signature but no embedded public key — legacy chunk.
+            # Verify hex format as minimum check, log deprecation warning.
             try:
-                # We don't have per-miner public keys yet, so verify using
-                # the chunk's own signable_data consistency. Full public key
-                # registry is a future enhancement.
-                # For now, verify that the signature is well-formed hex.
                 bytes.fromhex(chunk.signature)
+                bt.logging.debug(
+                    f"Sync: accepting legacy signed chunk {chunk.content_hash[:16]}... "
+                    f"(no embedded public_key — upgrade miner)"
+                )
             except ValueError:
                 bt.logging.warning(
                     f"Sync: rejecting chunk {chunk.content_hash[:16]}... — malformed signature"
                 )
                 continue
         elif not chunk.signature:
-            bt.logging.trace(
-                f"Sync: accepting unsigned chunk {chunk.content_hash[:16]}... (no signature)"
+            bt.logging.warning(
+                f"Sync: REJECTING unsigned chunk {chunk.content_hash[:16]}..."
             )
+            continue
 
         # Skip chunks we already have
         if chunk.content_hash in known_set:

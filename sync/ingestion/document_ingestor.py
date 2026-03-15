@@ -50,6 +50,8 @@ def _load_pdf(file_path: str) -> str:
         return "\n\n".join(pages)
     except ImportError:
         pass
+    except Exception:
+        pass
 
     # Fallback: try PyPDF2 (older name)
     try:
@@ -210,6 +212,7 @@ def ingest_file(
     chunk_size: int = DEFAULT_CHUNK_SIZE,
     chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
     title: str = "",
+    public_key: bytes = b"",
 ) -> List[KnowledgeChunk]:
     """
     Ingest a document file into KnowledgeChunks.
@@ -243,6 +246,7 @@ def ingest_file(
         source_file=os.path.basename(file_path),
         file_type=file_type,
         title=title or os.path.splitext(os.path.basename(file_path))[0],
+        public_key=public_key,
     )
 
 
@@ -255,6 +259,7 @@ def ingest_text(
     chunk_overlap: int = DEFAULT_CHUNK_OVERLAP,
     source: str = "direct_input",
     title: str = "",
+    public_key: bytes = b"",
 ) -> List[KnowledgeChunk]:
     """
     Ingest raw text into KnowledgeChunks.
@@ -285,6 +290,7 @@ def ingest_text(
         source_file=source,
         file_type="text",
         title=title or source,
+        public_key=public_key,
     )
 
 
@@ -298,6 +304,7 @@ def _ingest_text(
     source_file: str,
     file_type: str,
     title: str,
+    public_key: bytes = b"",
 ) -> List[KnowledgeChunk]:
     """Internal: split text and create signed KnowledgeChunks."""
     if not text or not text.strip():
@@ -328,7 +335,7 @@ def _ingest_text(
                 "date_ingested": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
             },
         )
-        chunk.sign(private_key)
+        chunk.sign(private_key, signer_public_key=public_key)
         chunks.append(chunk)
 
     return chunks

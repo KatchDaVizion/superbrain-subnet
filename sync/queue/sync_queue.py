@@ -30,6 +30,20 @@ class SyncQueue:
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA foreign_keys=ON")
         self._init_db()
+        self._migrate_db()
+
+    def _migrate_db(self):
+        """Add columns that may be missing from older databases."""
+        try:
+            cursor = self.conn.execute("PRAGMA table_info(public_chunks)")
+            columns = {row[1] for row in cursor.fetchall()}
+            if "public_key" not in columns:
+                self.conn.execute(
+                    "ALTER TABLE public_chunks ADD COLUMN public_key TEXT NOT NULL DEFAULT ''"
+                )
+                self.conn.commit()
+        except Exception:
+            pass
 
     def _init_db(self):
         """Create tables if they don't exist."""
@@ -42,7 +56,8 @@ class SyncQueue:
                 signature TEXT NOT NULL,
                 shared_at REAL NOT NULL,
                 metadata TEXT NOT NULL DEFAULT '{}',
-                synced INTEGER DEFAULT 0
+                synced INTEGER DEFAULT 0,
+                public_key TEXT NOT NULL DEFAULT ''
             );
 
             CREATE TABLE IF NOT EXISTS sync_log (
@@ -74,8 +89,8 @@ class SyncQueue:
         try:
             self.conn.execute(
                 """INSERT INTO public_chunks
-                   (content_hash, content, origin_node_id, timestamp, signature, shared_at, metadata)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                   (content_hash, content, origin_node_id, timestamp, signature, shared_at, metadata, public_key)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     chunk.content_hash,
                     chunk.content,
@@ -84,6 +99,7 @@ class SyncQueue:
                     chunk.signature,
                     chunk.shared_at or time.time(),
                     json.dumps(chunk.metadata),
+                    getattr(chunk, 'public_key', '') or '',
                 ),
             )
             self.conn.commit()
@@ -96,7 +112,7 @@ class SyncQueue:
         """Get chunks that haven't been synced to any peer yet."""
         cursor = self.conn.execute(
             """SELECT content_hash, content, origin_node_id, timestamp,
-                      signature, shared_at, metadata
+                      signature, shared_at, metadata, public_key
                FROM public_chunks
                WHERE synced = 0
                ORDER BY shared_at ASC
@@ -145,7 +161,7 @@ class SyncQueue:
         """Retrieve a chunk by its content hash."""
         cursor = self.conn.execute(
             """SELECT content_hash, content, origin_node_id, timestamp,
-                      signature, shared_at, metadata
+                      signature, shared_at, metadata, public_key
                FROM public_chunks
                WHERE content_hash = ?""",
             (content_hash,),
@@ -162,7 +178,7 @@ class SyncQueue:
         placeholders = ",".join("?" * len(hashes))
         cursor = self.conn.execute(
             f"""SELECT content_hash, content, origin_node_id, timestamp,
-                       signature, shared_at, metadata
+                       signature, shared_at, metadata, public_key
                 FROM public_chunks
                 WHERE content_hash IN ({placeholders})""",
             hashes,
@@ -173,7 +189,7 @@ class SyncQueue:
         """Get all public chunks regardless of sync status, newest first."""
         cursor = self.conn.execute(
             """SELECT content_hash, content, origin_node_id, timestamp,
-                      signature, shared_at, metadata
+                      signature, shared_at, metadata, public_key
                FROM public_chunks
                ORDER BY shared_at DESC
                LIMIT ?""",
@@ -182,14 +198,43 @@ class SyncQueue:
         return [self._row_to_chunk(row) for row in cursor.fetchall()]
 
     def get_random_chunks(self, limit: int = 10) -> List[KnowledgeChunk]:
-        """Get random public chunks for query generation."""
+        """Get random public chunks for query generation.
+
+        Uses rowid sampling for large tables (O(limit) instead of O(N) full-table
+        ORDER BY RANDOM()). Falls back to ORDER BY RANDOM() for small tables
+        where the overhead is negligible.
+        """
+        total = self.chunk_count()
+        if total <= 100:
+            # Small table — ORDER BY RANDOM() is fine
+            cursor = self.conn.execute(
+                """SELECT content_hash, content, origin_node_id, timestamp,
+                          signature, shared_at, metadata, public_key
+                   FROM public_chunks
+                   ORDER BY RANDOM()
+                   LIMIT ?""",
+                (limit,),
+            )
+            return [self._row_to_chunk(row) for row in cursor.fetchall()]
+
+        # Large table — sample random rowids
+        import random
+        cursor = self.conn.execute("SELECT MIN(rowid), MAX(rowid) FROM public_chunks")
+        min_id, max_id = cursor.fetchone()
+        if min_id is None:
+            return []
+
+        # Over-sample to account for gaps in rowid sequence
+        sample_size = min(limit * 3, max_id - min_id + 1)
+        candidates = random.sample(range(min_id, max_id + 1), sample_size)
+        placeholders = ",".join("?" * len(candidates))
         cursor = self.conn.execute(
-            """SELECT content_hash, content, origin_node_id, timestamp,
-                      signature, shared_at, metadata
-               FROM public_chunks
-               ORDER BY RANDOM()
-               LIMIT ?""",
-            (limit,),
+            f"""SELECT content_hash, content, origin_node_id, timestamp,
+                       signature, shared_at, metadata, public_key
+                FROM public_chunks
+                WHERE rowid IN ({placeholders})
+                LIMIT ?""",
+            candidates + [limit],
         )
         return [self._row_to_chunk(row) for row in cursor.fetchall()]
 
@@ -246,4 +291,5 @@ class SyncQueue:
             pool_visibility="public",
             shared_at=row[5],
             metadata=json.loads(row[6]) if row[6] else {},
+            public_key=row[7] if len(row) > 7 else "",
         )

@@ -99,6 +99,9 @@ class Miner(BaseMinerNeuron):
         else:
             bt.logging.warning("Ollama unavailable — extractive fallback active")
 
+        # Node identity keypair (for signing chunks)
+        self._node_private_key, self._node_public_key = generate_node_keypair()
+
         # Knowledge sync queue
         db_dir = self.config.neuron.full_path if hasattr(self.config.neuron, 'full_path') else "."
         sync_db = os.path.join(db_dir, "miner_sync_queue.db")
@@ -326,7 +329,7 @@ Answer (cite with [1], [2], etc.):"""
                     pool_visibility="public",
                     shared_at=time.time(),
                 )
-                c.sign(priv)
+                c.sign(priv, signer_public_key=pub)
                 if self.sync_queue.add_to_queue(c):
                     added += 1
             bt.logging.info(f"Seeded {added} knowledge chunks into sync queue")

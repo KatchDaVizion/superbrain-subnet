@@ -311,11 +311,27 @@ async def run_sync(
 
     # Step 5: Ingest received chunks into local queue
     for chunk in received_chunks:
-        # Verify signature if we have peer's public key
-        if peer_public_key and chunk.signature:
+        # Ed25519 self-certifying verification:
+        # Each chunk carries its own public_key. Verify signature against it.
+        if chunk.signature and chunk.public_key:
+            if not chunk.verify_self():
+                result.errors.append(
+                    f"Signature verification FAILED for {chunk.content_hash[:16]} "
+                    f"(node={chunk.origin_node_id[:8]}) — chunk rejected"
+                )
+                continue
+        elif chunk.signature and peer_public_key:
+            # Legacy: chunk has signature but no embedded public_key — use peer key
             if not chunk.verify(peer_public_key):
                 result.errors.append(f"Signature verification failed for {chunk.content_hash[:16]}")
                 continue
+        elif not chunk.signature:
+            # Unsigned chunk — reject in production, accept only if explicitly allowed
+            result.errors.append(
+                f"Unsigned chunk {chunk.content_hash[:16]} from "
+                f"{chunk.origin_node_id[:8]} — rejected"
+            )
+            continue
 
         # Ensure chunk is marked as public for queue insertion
         chunk.pool_visibility = "public"

@@ -47,6 +47,7 @@ class KnowledgeChunk(BaseModel):
     origin_node_id: str = ""  # UUID of originating node
     timestamp: float = 0.0  # epoch seconds
     signature: str = ""  # Ed25519 or HMAC signature
+    public_key: str = ""  # hex-encoded signer public key (for self-certifying verification)
     pool_visibility: Literal["private", "public"] = "private"
     shared_at: Optional[float] = None  # when marked public
     metadata: Dict = Field(default_factory=dict)  # source_file, page, collection, tags
@@ -80,16 +81,49 @@ class KnowledgeChunk(BaseModel):
         """The canonical bytes to sign: hash + node_id + timestamp."""
         return f"{self.content_hash}:{self.origin_node_id}:{self.timestamp}".encode()
 
-    def sign(self, private_key: bytes) -> "KnowledgeChunk":
-        """Sign this chunk with the node's private key. Returns self."""
+    def sign(self, private_key: bytes, signer_public_key: bytes = b"") -> "KnowledgeChunk":
+        """Sign this chunk and embed the signer's public key. Returns self."""
         self.signature = sign_data(self.signable_data, private_key)
+        if signer_public_key:
+            self.public_key = signer_public_key.hex()
+        elif _HAS_ED25519 and len(private_key) == 32:
+            # Derive public key from private key
+            try:
+                key = Ed25519PrivateKey.from_private_bytes(private_key)
+                self.public_key = key.public_key().public_bytes(
+                    Encoding.Raw, PublicFormat.Raw
+                ).hex()
+            except Exception:
+                pass
         return self
 
-    def verify(self, public_key: bytes) -> bool:
-        """Verify this chunk's signature against a public key."""
+    def verify(self, public_key: bytes = b"") -> bool:
+        """
+        Verify this chunk's signature.
+        Uses the provided public_key, or falls back to the embedded self.public_key.
+        Returns True if valid, False if invalid or unsigned.
+        """
         if not self.signature:
             return False
-        return verify_signature(self.signable_data, self.signature, public_key)
+        key = public_key or (bytes.fromhex(self.public_key) if self.public_key else b"")
+        if not key:
+            return False
+        return verify_signature(self.signable_data, self.signature, key)
+
+    def verify_self(self) -> bool:
+        """
+        Verify this chunk's signature against its own embedded public key.
+        This is the self-certifying verification model: the chunk carries
+        its own public key, and we verify the signature matches.
+        Returns True if signature is valid, False otherwise.
+        """
+        if not self.signature or not self.public_key:
+            return False
+        try:
+            pub_bytes = bytes.fromhex(self.public_key)
+        except ValueError:
+            return False
+        return verify_signature(self.signable_data, self.signature, pub_bytes)
 
 
 class ManifestEntry(BaseModel):
@@ -202,6 +236,44 @@ def verify_signature(data: bytes, signature: str, public_key: bytes) -> bool:
     # HMAC fallback
     expected = hmac.new(public_key, data, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, signature)
+
+
+# ── Node Identity Registry (TOFU — Trust On First Use) ─────────────
+
+class NodeIdentityRegistry:
+    """
+    Tracks node_id → public_key bindings.
+    First time a node_id is seen with a public_key, the binding is stored.
+    Subsequent chunks from the same node_id must use the same public_key.
+    This prevents a malicious node from impersonating another.
+    """
+
+    def __init__(self):
+        self._bindings: Dict[str, str] = {}  # node_id → public_key_hex
+
+    def check_and_register(self, node_id: str, public_key_hex: str) -> bool:
+        """
+        Check if this node_id/public_key pair is trusted.
+        Returns True if trusted (first use or matches existing binding).
+        Returns False if node_id is already bound to a DIFFERENT public_key.
+        """
+        if not node_id or not public_key_hex:
+            return True  # Can't enforce without both values
+
+        existing = self._bindings.get(node_id)
+        if existing is None:
+            # First use — trust and register
+            self._bindings[node_id] = public_key_hex
+            return True
+        return existing == public_key_hex
+
+    def get_public_key(self, node_id: str) -> Optional[str]:
+        """Get the registered public key for a node_id, or None."""
+        return self._bindings.get(node_id)
+
+    @property
+    def registered_count(self) -> int:
+        return len(self._bindings)
 
 
 # ── Diff Computation ────────────────────────────────────────────────

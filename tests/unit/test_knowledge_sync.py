@@ -30,7 +30,7 @@ from sync.protocol.pool_model import (
 from sync.queue.sync_queue import SyncQueue
 
 # Import scoring functions
-from subnet.superbrain.validator.sync_reward import (
+from superbrain.validator.sync_reward import (
     W_VALIDITY,
     W_FRESHNESS,
     W_QUANTITY,
@@ -46,14 +46,14 @@ from subnet.superbrain.validator.sync_reward import (
 )
 
 # Import sync forward
-from subnet.superbrain.validator.sync_forward import (
+from superbrain.validator.sync_forward import (
     _decode_and_validate_batch,
     SYNC_INTERVAL_STEPS,
     MAX_CHUNKS_PER_SYNC,
 )
 
 # Import protocol
-from subnet.superbrain.protocol import KnowledgeSyncSynapse
+from superbrain.protocol import KnowledgeSyncSynapse
 
 # ── Test infrastructure ──────────────────────────────────────────
 
@@ -1063,7 +1063,7 @@ def test_synapse_has_known_hashes():
 
 def test_rag_synapse_distinct():
     print("\n83. Synapse type — RAGSynapse is distinct")
-    from subnet.superbrain.protocol import RAGSynapse
+    from superbrain.protocol import RAGSynapse
     r = RAGSynapse()
     check(hasattr(r, 'query'), "RAGSynapse has query")
     check(hasattr(r, 'context_chunks'), "RAGSynapse has context_chunks")

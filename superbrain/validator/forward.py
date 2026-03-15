@@ -11,6 +11,7 @@
 # Dynamic Knowledge: Pulls chunks from sync_queue when available.
 # Falls back to static KNOWLEDGE_BASE when sync_queue is empty.
 
+import asyncio
 import random
 import time
 
@@ -249,4 +250,4 @@ async def forward(self):
     # 7. Update scores
     self.update_scores(rewards, miner_uids)
 
-    time.sleep(5)
+    await asyncio.sleep(5)

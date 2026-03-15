@@ -122,6 +122,9 @@ def decode_batch(batch_data_b64):
 #  THE INTEGRATION TEST
 # ═══════════════════════════════════════════════════════════════════
 
+import pytest
+
+@pytest.mark.asyncio
 async def test_full_loop():
     print("=" * 66)
     print("  SUPERBRAIN INTEGRATION TEST")

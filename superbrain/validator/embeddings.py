@@ -7,7 +7,7 @@
 
 import os
 import logging
-from typing import List
+from typing import List, Optional
 
 import numpy as np
 
@@ -21,6 +21,22 @@ BACKEND_WORDOVERLAP = "wordoverlap"
 _embedding_backend: str = BACKEND_WORDOVERLAP
 _ollama_url: str = os.environ.get("OLLAMA_URL", "http://localhost:11434")
 _ollama_model: str = os.environ.get("SUPERBRAIN_EMBED_MODEL", "nomic-embed-text")
+
+# ── FAISS index (optional acceleration layer) ───────────────────────
+# FAISS sits *on top of* the embedding backend — it indexes vectors from
+# whichever backend is active (Ollama or TF-IDF) and provides O(1)
+# approximate nearest-neighbor search instead of O(N) cosine scan.
+
+_faiss_available: bool = False
+_faiss_index = None          # faiss.IndexFlatIP instance
+_faiss_texts: List[str] = []  # parallel list of indexed texts
+_faiss_dim: int = 0
+
+try:
+    import faiss as _faiss_lib
+    _faiss_available = True
+except ImportError:
+    _faiss_lib = None
 
 
 # ── Backend detection ────────────────────────────────────────────────
@@ -156,6 +172,158 @@ def word_overlap(text_a: str, text_b: str) -> float:
     if not words_a:
         return 0.0
     return len(words_a & words_b) / len(words_a)
+
+
+# ── FAISS index management ─────────────────────────────────────────
+
+def faiss_available() -> bool:
+    """True if FAISS library is importable."""
+    return _faiss_available
+
+
+def faiss_build_index(texts: List[str]) -> bool:
+    """
+    Build a FAISS inner-product index from a list of texts.
+    Uses the current embedding backend (Ollama or TF-IDF) to compute vectors.
+    Returns True if the index was built successfully.
+    """
+    global _faiss_index, _faiss_texts, _faiss_dim
+
+    if not _faiss_available:
+        return False
+    if not texts:
+        _faiss_index = None
+        _faiss_texts = []
+        return True
+
+    vectors = _embed_texts_for_faiss(texts)
+    if vectors is None:
+        return False
+
+    _faiss_dim = vectors.shape[1]
+    # Normalize for inner product = cosine similarity
+    _faiss_lib.normalize_L2(vectors)
+    index = _faiss_lib.IndexFlatIP(_faiss_dim)
+    index.add(vectors)
+    _faiss_index = index
+    _faiss_texts = list(texts)
+    logger.info(f"FAISS index built: {len(texts)} vectors, dim={_faiss_dim}")
+    return True
+
+
+def faiss_search(query: str, top_k: int = 10) -> Optional[List[tuple]]:
+    """
+    Search the FAISS index for nearest neighbors.
+    Returns list of (index, score) tuples, or None if index not available.
+    """
+    if not _faiss_available or _faiss_index is None or _faiss_index.ntotal == 0:
+        return None
+
+    q_vec = _embed_single_for_faiss(query)
+    if q_vec is None:
+        return None
+
+    _faiss_lib.normalize_L2(q_vec)
+    k = min(top_k, _faiss_index.ntotal)
+    scores, indices = _faiss_index.search(q_vec, k)
+
+    results = []
+    for i in range(k):
+        idx = int(indices[0][i])
+        if idx < 0:
+            continue
+        score = float(np.clip(scores[0][i], 0.0, 1.0))
+        results.append((idx, score))
+    return results
+
+
+def faiss_batch_similarity(query: str, chunks: List[str]) -> Optional[List[float]]:
+    """
+    Compute similarity between query and all indexed chunks via FAISS.
+    Returns a list parallel to _faiss_texts (not the input chunks list).
+    Returns None if FAISS isn't available or index doesn't match chunks.
+    """
+    if not _faiss_available or _faiss_index is None:
+        return None
+    if len(_faiss_texts) != len(chunks) or _faiss_texts != chunks:
+        return None
+
+    q_vec = _embed_single_for_faiss(query)
+    if q_vec is None:
+        return None
+
+    _faiss_lib.normalize_L2(q_vec)
+    k = _faiss_index.ntotal
+    scores, indices = _faiss_index.search(q_vec, k)
+
+    result = [0.0] * len(chunks)
+    for i in range(k):
+        idx = int(indices[0][i])
+        if 0 <= idx < len(result):
+            result[idx] = float(np.clip(scores[0][i], 0.0, 1.0))
+    return result
+
+
+def _embed_texts_for_faiss(texts: List[str]) -> Optional[np.ndarray]:
+    """Embed a list of texts into numpy vectors using current backend."""
+    if _embedding_backend == BACKEND_OLLAMA:
+        try:
+            vecs = []
+            for t in texts:
+                if t and t.strip():
+                    vecs.append(_ollama_embed(t))
+                else:
+                    vecs.append(None)
+            # Fill None with zero vectors
+            dim = next((v.shape[0] for v in vecs if v is not None), None)
+            if dim is None:
+                return None
+            result = np.zeros((len(texts), dim), dtype=np.float32)
+            for i, v in enumerate(vecs):
+                if v is not None:
+                    result[i] = v
+            return result
+        except Exception as e:
+            logger.warning(f"FAISS Ollama embedding failed: {e}")
+
+    if _embedding_backend in (BACKEND_OLLAMA, BACKEND_TFIDF):
+        try:
+            from sklearn.feature_extraction.text import TfidfVectorizer
+            safe = [t if t and t.strip() else "" for t in texts]
+            vectorizer = TfidfVectorizer()
+            tfidf = vectorizer.fit_transform(safe)
+            return np.array(tfidf.todense(), dtype=np.float32)
+        except Exception as e:
+            logger.warning(f"FAISS TF-IDF embedding failed: {e}")
+
+    return None
+
+
+def _embed_single_for_faiss(text: str) -> Optional[np.ndarray]:
+    """Embed a single text for FAISS query. Returns (1, dim) array."""
+    if not text or not text.strip():
+        return None
+
+    if _embedding_backend == BACKEND_OLLAMA:
+        try:
+            vec = _ollama_embed(text)
+            return vec.reshape(1, -1)
+        except Exception:
+            pass
+
+    if _embedding_backend in (BACKEND_OLLAMA, BACKEND_TFIDF):
+        try:
+            from sklearn.feature_extraction.text import TfidfVectorizer
+            # Need to refit with same vocabulary — use stored texts
+            if _faiss_texts:
+                vectorizer = TfidfVectorizer()
+                all_texts = [t if t and t.strip() else "" for t in _faiss_texts] + [text]
+                tfidf = vectorizer.fit_transform(all_texts)
+                return np.array(tfidf[-1].todense(), dtype=np.float32)
+        except Exception:
+            pass
+
+    return None
 
 
 # ── Public API ───────────────────────────────────────────────────────

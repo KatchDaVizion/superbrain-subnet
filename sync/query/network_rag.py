@@ -125,8 +125,9 @@ class NetworkRAGQuery:
         """
         Search the knowledge pool for chunks relevant to query.
 
-        Embedding similarity with freshness bonus and diversity filter.
-        Returns up to top_k results sorted by combined score.
+        Uses FAISS approximate nearest-neighbor when available, falls back
+        to O(N) batch cosine similarity. Applies freshness bonus and
+        diversity filter. Returns up to top_k results sorted by combined score.
         """
         if not query or not query.strip():
             return []
@@ -139,9 +140,17 @@ class NetworkRAGQuery:
         if not chunks:
             return []
 
-        # Compute similarity scores
         contents = [c.content for c in chunks]
-        similarities = embeddings.batch_cosine_similarity(query, contents)
+
+        # Try FAISS accelerated search first
+        similarities = None
+        if embeddings.faiss_available() and len(chunks) >= 20:
+            embeddings.faiss_build_index(contents)
+            similarities = embeddings.faiss_batch_similarity(query, contents)
+
+        # Fall back to O(N) batch cosine
+        if similarities is None:
+            similarities = embeddings.batch_cosine_similarity(query, contents)
 
         now = time.time()
         results = []

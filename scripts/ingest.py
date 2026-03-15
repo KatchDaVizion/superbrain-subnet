@@ -31,31 +31,45 @@ from sync.queue.sync_queue import SyncQueue
 
 def _load_keypair_from_wallet(wallet_name: str, hotkey: str = "default"):
     """
-    Try to load or derive a keypair from a Bittensor wallet.
-    Falls back to generating a fresh Ed25519 keypair if bittensor is not available.
+    Try to derive a deterministic Ed25519 keypair from a Bittensor wallet's
+    PRIVATE key material. Falls back to generating a fresh keypair.
+
+    SECURITY: We use the hotkey's PRIVATE seed bytes (not public key) to derive
+    the Ed25519 keypair. The public key is on-chain and known to everyone —
+    using it as a private key seed would let anyone forge signatures.
     """
     try:
         import bittensor as bt
+        import hashlib
 
         wallet = bt.wallet(name=wallet_name, hotkey=hotkey)
-        # Use the hotkey's raw bytes as seed for deterministic Ed25519 keypair
-        seed = wallet.hotkey.public_key[:32] if hasattr(wallet.hotkey, "public_key") else None
-        if seed and len(seed) >= 32:
-            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-            from cryptography.hazmat.primitives.serialization import (
-                Encoding,
-                NoEncryption,
-                PrivateFormat,
-                PublicFormat,
-            )
+        # Use the hotkey's private key bytes as seed material.
+        # Hash them through SHA-256 to get a clean 32-byte Ed25519 seed
+        # that is distinct from the SR25519 key itself.
+        if hasattr(wallet.hotkey, "private_key") and wallet.hotkey.private_key:
+            raw_private = bytes(wallet.hotkey.private_key)
+        elif hasattr(wallet.hotkey, "_private_key") and wallet.hotkey._private_key:
+            raw_private = bytes(wallet.hotkey._private_key)
+        else:
+            raise ValueError("Cannot access hotkey private key — wallet may be encrypted")
 
-            # Derive Ed25519 key from wallet seed
-            priv_key = Ed25519PrivateKey.from_private_bytes(seed[:32])
-            priv_bytes = priv_key.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
-            pub_bytes = priv_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-            return priv_bytes, pub_bytes, wallet.hotkey.ss58_address
-    except Exception:
-        pass
+        # Derive a separate Ed25519 seed via domain-separated hash
+        seed = hashlib.sha256(b"superbrain-ed25519-v1:" + raw_private).digest()
+
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        from cryptography.hazmat.primitives.serialization import (
+            Encoding,
+            NoEncryption,
+            PrivateFormat,
+            PublicFormat,
+        )
+
+        priv_key = Ed25519PrivateKey.from_private_bytes(seed)
+        priv_bytes = priv_key.private_bytes(Encoding.Raw, PrivateFormat.Raw, NoEncryption())
+        pub_bytes = priv_key.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+        return priv_bytes, pub_bytes, wallet.hotkey.ss58_address
+    except Exception as e:
+        print(f"Wallet keypair derivation failed ({e}) — using ephemeral keypair")
 
     # Fallback: generate fresh keypair
     priv, pub = generate_node_keypair()
@@ -100,6 +114,7 @@ def main():
     if args.wallet:
         priv, pub, node_label = _load_keypair_from_wallet(args.wallet, args.hotkey)
         print(f"Wallet: {args.wallet} (node: {node_label})")
+        print(f"Public key: {pub.hex()[:16]}...")
     else:
         priv, pub = generate_node_keypair()
         node_label = "local-node"
@@ -121,6 +136,7 @@ def main():
             chunk_size=args.chunk_size,
             chunk_overlap=args.chunk_overlap,
             title=args.title,
+            public_key=pub,
         )
     else:
         print(f"Ingesting: inline text ({len(args.text)} chars)")
@@ -133,6 +149,7 @@ def main():
             chunk_overlap=args.chunk_overlap,
             source="cli_input",
             title=args.title or "CLI Input",
+            public_key=pub,
         )
 
     if not chunks:
