@@ -57,7 +57,7 @@ async def main():
     parser = argparse.ArgumentParser(description="SuperBrain LAN Sync Node")
     parser.add_argument("--seed", action="store_true", help="Add 10 sample knowledge chunks")
     parser.add_argument("--add", type=str, help="Add a custom knowledge chunk")
-    parser.add_argument("--port", type=int, default=8384, help="Sync server port (default: 8384)")
+    parser.add_argument("--port", type=int, default=8385, help="Sync server port (default: 8385)")
     parser.add_argument("--static", type=str, help="Static peer IP:PORT (skip mDNS discovery)")
     parser.add_argument("--interval", type=int, default=10, help="Sync interval in seconds (default: 10)")
     parser.add_argument("--db", type=str, default=None, help="Path to SQLite database (default: temp dir)")
