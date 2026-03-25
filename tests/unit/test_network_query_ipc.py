@@ -215,7 +215,11 @@ def test_answer_mode():
     ]
     db = _make_db_with_chunks(chunks)
 
-    result = _run_ipc({"query": "machine learning neural networks", "db_path": db, "top_k": 5, "mode": "answer"})
+    result = subprocess.run(
+        [sys.executable, IPC_SCRIPT, json.dumps({"query": "machine learning neural networks", "db_path": db, "top_k": 5, "mode": "answer"})],
+        capture_output=True, text=True, timeout=30, cwd=PROJECT_ROOT,
+        env={**os.environ, "SUPERBRAIN_EMBEDDING_BACKEND": "wordoverlap", "OLLAMA_URL": "http://127.0.0.1:1"},
+    )
     check(result.returncode == 0, f"exit code 0, got {result.returncode}")
 
     output = json.loads(result.stdout.strip())
