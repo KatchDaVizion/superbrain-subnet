@@ -1,5 +1,5 @@
-const PYTHON   = "/root/superbrain-subnet/venv/bin/python";
-const CWD      = "/root/superbrain-subnet";
+const PYTHON   = "/root/superbrain-sandbox/superbrain-subnet/venv/bin/python";
+const CWD      = "/root/superbrain-sandbox/superbrain-subnet";
 const NETUID   = "442";
 const NETWORK  = "test";
 
@@ -15,6 +15,7 @@ module.exports = {
       watch: false,
       max_restarts: 10,
       restart_delay: 10000,
+      max_memory_restart: "512M",
       env: { PYTHONPATH: CWD, PYTHONUNBUFFERED: "1" },
       error_file: "logs/miner-error.log",
       out_file: "logs/miner-out.log",
@@ -29,6 +30,7 @@ module.exports = {
       watch: false,
       max_restarts: 10,
       restart_delay: 10000,
+      max_memory_restart: "512M",
       env: { PYTHONPATH: CWD, PYTHONUNBUFFERED: "1" },
       error_file: "logs/validator-error.log",
       out_file: "logs/validator-out.log",
@@ -43,6 +45,7 @@ module.exports = {
       watch: false,
       max_restarts: 10,
       restart_delay: 10000,
+      max_memory_restart: "512M",
       env: { PYTHONPATH: CWD },
       error_file: "logs/sync-node-error.log",
       out_file: "logs/sync-node-out.log",

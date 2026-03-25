@@ -1,10 +1,12 @@
 # Copyright 2026 Lys-David Louis-Charles (KatchDaVizion)
-# SuperBrain Reward Function — 4-Factor Scoring (V2: Embedding-Enhanced)
+# SuperBrain Reward Function — 4-Factor Scoring (V3: Anti-Gaming Gates)
 #
 # Final Score = (0.40 x Supportedness) + (0.25 x Relevance) + (0.20 x Novelty) + (0.15 x Latency)
-# V2: When semantic embeddings are available, uses cosine similarity instead of word overlap.
-#     Adds length penalty (multiplier) and citation quality (sub-factor of supportedness).
-#     When no embedding backend is available, behavior is identical to V1.
+# V2: Embedding-enhanced scoring + length penalty (char-based) + citation quality.
+# V3: Three hard gates applied before / after the factor scores:
+#     1. Relevance gate  — response vocab overlap with query+context < 15% → score 0.0
+#     2. Word-length penalty — response < 10 words or > 2000 words → multiply by 0.7
+#     3. Citation validity  — any out-of-range citation index → treat as no citations
 
 import hashlib
 import numpy as np
@@ -189,6 +191,70 @@ def score_length_penalty(response: str, min_chars: int = 50, max_chars: int = 20
     return max(0.3, 1.0 - (excess / (2 * max_chars)))
 
 
+# ---------------------------------------------------------------------------
+# V3 — Anti-Gaming Gates
+# ---------------------------------------------------------------------------
+
+# Minimum vocabulary overlap fraction for the relevance gate (Rule 1)
+RELEVANCE_GATE_THRESHOLD = 0.15
+
+# Word-length bounds for the length-sanity penalty (Rule 2)
+WORD_LENGTH_MIN = 10
+WORD_LENGTH_MAX = 2000
+
+# Multiplier applied when word-length bounds are violated (Rule 2)
+WORD_LENGTH_PENALTY = 0.7
+
+
+def check_relevance_gate(response: str, query: str, context_chunks: List[str]) -> bool:
+    """
+    Rule 1 — Relevance gate.
+
+    Returns False (gate fails → score forced to 0.0) when the miner response
+    shares less than RELEVANCE_GATE_THRESHOLD (15%) vocabulary overlap with the
+    combined query + context text.  Catches off-topic or copy-paste spam.
+    """
+    if not response or not response.strip():
+        return False
+    combined = query + " " + " ".join(context_chunks)
+    resp_words = _word_set(response)
+    ctx_words = _word_set(combined)
+    if not resp_words or not ctx_words:
+        return False
+    overlap = len(resp_words & ctx_words) / len(resp_words)
+    return overlap >= RELEVANCE_GATE_THRESHOLD
+
+
+def apply_word_length_penalty(response: str) -> float:
+    """
+    Rule 2 — Word-length sanity penalty.
+
+    Returns WORD_LENGTH_PENALTY (0.7) as a score multiplier when the response
+    word count is below WORD_LENGTH_MIN (10) or above WORD_LENGTH_MAX (2000),
+    meaning a 0.3 penalty is applied.  Returns 1.0 (no penalty) otherwise.
+    """
+    if not response:
+        return WORD_LENGTH_PENALTY
+    word_count = len(response.strip().split())
+    if word_count < WORD_LENGTH_MIN or word_count > WORD_LENGTH_MAX:
+        return WORD_LENGTH_PENALTY
+    return 1.0
+
+
+def check_citation_validity(citations: List[int], n_chunks: int) -> bool:
+    """
+    Rule 3 — Citation validity.
+
+    Returns False when any citation index falls outside [0, n_chunks).
+    Invented (out-of-range) indices signal hallucinated citations and cause
+    supportedness to be recalculated with the invalid indices stripped.
+    """
+    if not citations:
+        return True  # no citations ≠ invalid citations
+    return all(0 <= i < n_chunks for i in citations)
+
+
+# ---------------------------------------------------------------------------
 # Single Response Reward
 
 def reward(
@@ -214,6 +280,14 @@ def reward(
     if not resp_text.strip():
         return 0.0
 
+    # V3 Rule 1: Relevance gate — off-topic responses score 0
+    if not check_relevance_gate(resp_text, query, context_chunks):
+        return 0.0
+
+    # V3 Rule 3: Citation validity — strip invented indices before scoring
+    if not check_citation_validity(citations, len(context_chunks)):
+        citations = [i for i in citations if 0 <= i < len(context_chunks)]
+
     s = score_supportedness(resp_text, context_chunks, citations)
     r = score_relevance(query, context_chunks, citations)
     n = score_novelty(resp_text, previous_responses)
@@ -221,10 +295,14 @@ def reward(
 
     final = (W_SUPPORTEDNESS * s) + (W_RELEVANCE * r) + (W_NOVELTY * n) + (W_LATENCY * l)
 
-    # V2: Apply length penalty as multiplier (only when semantic backend active)
+    # V2: Apply char-length penalty as multiplier (only when semantic backend active)
+    lp = 1.0
     if _is_semantic():
         lp = score_length_penalty(resp_text)
         final *= lp
+
+    # V3 Rule 2: Word-length sanity penalty (always applied)
+    final *= apply_word_length_penalty(resp_text)
 
     if _has_bt:
         backend = _get_embedding_backend()

@@ -13,6 +13,7 @@
 
 import asyncio
 import random
+import re
 import time
 
 import bittensor as bt
@@ -90,46 +91,91 @@ CHALLENGE_QUERIES = [
     },
 ]
 
-# Query templates for generating questions from synced chunks
-_QUERY_TEMPLATES = [
-    "Based on the following information, what are the key concepts discussed?",
-    "Summarize the main points from the provided context.",
-    "What is the most important information in the given sources?",
-    "Explain the concepts described in the provided documents.",
-    "What conclusions can be drawn from the provided information?",
-]
-
 # Minimum chunks needed to build a dynamic query
 MIN_CHUNKS_FOR_DYNAMIC = 2
+
+# Module-level set of chunk hashes used in the previous round (diversity tracking).
+# Replaced wholesale each round so it never grows unbounded.
+_SEEN_CHUNK_HASHES: set = set()
+
+
+def _extract_question(text: str) -> str:
+    """
+    Derive a natural, content-specific question from a knowledge chunk.
+
+    Applies a hierarchy of regex heuristics so each chunk yields a question
+    tied to its subject matter rather than a generic template.
+    """
+    sentence = re.split(r"(?<=[.!?])\s+", text.strip())[0].strip()
+
+    # "X is [a/an/the] …" → "What is X?"
+    m = re.match(r"^(.+?)\s+is\s+(?:a |an |the )?(.+)", sentence, re.IGNORECASE)
+    if m:
+        subject = m.group(1).strip().rstrip(".,;:")
+        return f"What is {subject}?"
+
+    # "X uses/enables/provides/creates …" → "How does X work?"
+    m = re.match(
+        r"^(.+?)\s+(uses|enables|allows|provides|creates|supports)\b",
+        sentence,
+        re.IGNORECASE,
+    )
+    if m:
+        subject = m.group(1).strip().rstrip(".,;:")
+        return f"How does {subject} work?"
+
+    # "X lets/helps/makes/ensures …" → "What does X do?"
+    m = re.match(r"^(.+?)\s+(lets|helps|makes|ensures)\b", sentence, re.IGNORECASE)
+    if m:
+        subject = m.group(1).strip().rstrip(".,;:")
+        return f"What does {subject} do?"
+
+    # Fallback: use first meaningful words as topic
+    stop = {"the", "a", "an", "is", "are", "was", "were", "in", "on", "at", "and", "or"}
+    words = [w.strip(".,;:") for w in sentence.split() if w.lower() not in stop and len(w) > 3]
+    topic = " ".join(words[:3]) if words else sentence[:40]
+    return f"What can you tell me about {topic}?"
 
 
 def _build_dynamic_query(chunks):
     """
     Build a RAG query from synced knowledge chunks.
 
-    Selects 2-4 random chunks and generates a query template.
-    Returns (query, selected_chunks, sources) or None if not enough chunks.
+    V2 behaviour (anti-gaming):
+    - Selects exactly 3 chunks per round (or all available if fewer).
+    - Diversity gate: prefers chunks not seen in the previous round so
+      consecutive validation rounds never reuse the same material.
+    - Generates a natural, content-specific question from the primary chunk
+      via _extract_question() instead of a generic template string.
+    - Updates _SEEN_CHUNK_HASHES for the next round.
+
+    Returns (query, chunk_texts, sources) or None if pool is too small.
     """
+    global _SEEN_CHUNK_HASHES
+
     if len(chunks) < MIN_CHUNKS_FOR_DYNAMIC:
         return None
 
-    # Pick 2-4 chunks (or all if fewer available)
-    n_select = min(random.randint(2, 4), len(chunks))
-    selected = random.sample(chunks, n_select)
+    # Prefer chunks not seen last round; fall back to full pool if needed
+    fresh = [c for c in chunks if c.content_hash not in _SEEN_CHUNK_HASHES]
+    pool = fresh if len(fresh) >= MIN_CHUNKS_FOR_DYNAMIC else chunks
 
-    # Extract text content for context
+    n_select = min(3, len(pool))
+    selected = random.sample(pool, n_select)
+
+    # Natural question derived from primary chunk content
+    query = _extract_question(selected[0].content)
+
     chunk_texts = [c.content for c in selected]
-
-    # Build source labels from metadata or origin_node_id
     sources = []
     for c in selected:
-        src = c.metadata.get("source_file", "") if c.metadata else ""
+        src = (c.metadata or {}).get("source_file", "")
         if not src:
             src = f"chunk_{c.content_hash[:8]}"
         sources.append(src)
 
-    # Select query template
-    query = random.choice(_QUERY_TEMPLATES)
+    # Record this round's hashes so next round avoids them
+    _SEEN_CHUNK_HASHES = {c.content_hash for c in selected}
 
     return query, chunk_texts, sources
 

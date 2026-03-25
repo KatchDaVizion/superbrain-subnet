@@ -3,6 +3,7 @@
 # Copyright 2026 Lys-David Louis-Charles (KatchDaVizion)
 
 import copy
+import time
 import typing
 
 import bittensor as bt
@@ -118,16 +119,32 @@ class BaseNeuron(ABC):
         # Always save state.
         self.save_state()
 
-    def check_registered(self):
-        if not self.subtensor.is_hotkey_registered(
-            netuid=self.config.netuid,
-            hotkey_ss58=self.wallet.hotkey.ss58_address,
-        ):
-            bt.logging.error(
-                f"Wallet: {self.wallet} is not registered on netuid {self.config.netuid}."
-                f" Please register the hotkey using `btcli subnets register` before trying again"
-            )
-            exit()
+    def check_registered(self, max_attempts: int = 3, backoff: float = 30.0):
+        """
+        Verify the hotkey is registered on the target subnet.
+
+        Retries up to max_attempts times with backoff seconds between attempts
+        before logging an error and calling exit().  This prevents transient
+        RPC failures from crashing the neuron during startup.
+        """
+        for attempt in range(1, max_attempts + 1):
+            if self.subtensor.is_hotkey_registered(
+                netuid=self.config.netuid,
+                hotkey_ss58=self.wallet.hotkey.ss58_address,
+            ):
+                return  # registered — continue startup
+            if attempt < max_attempts:
+                bt.logging.warning(
+                    f"Wallet {self.wallet} not registered on netuid {self.config.netuid} "
+                    f"(attempt {attempt}/{max_attempts}). Retrying in {backoff:.0f}s…"
+                )
+                time.sleep(backoff)
+
+        bt.logging.error(
+            f"Wallet: {self.wallet} is not registered on netuid {self.config.netuid}."
+            f" Please register the hotkey using `btcli subnets register` before trying again"
+        )
+        exit()
 
     def should_sync_metagraph(self):
         return (
