@@ -9,7 +9,7 @@ Usage:
   python3 run_sync_node.py --seed
 
   # Connect to a specific peer (e.g. miner on Tailscale)
-  python3 run_sync_node.py --seed --static 100.x.x.x:8384
+  python3 run_sync_node.py --seed --static 100.x.x.x:8385
 
   # Use the miner's database directly (Way 1 — shared DB)
   python3 run_sync_node.py --seed --db ~/superbrain-dev/subnet/miner_sync_queue.db
