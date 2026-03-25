@@ -1,5 +1,5 @@
-const PYTHON   = "/root/superbrain-sandbox/superbrain-subnet/venv/bin/python";
-const CWD      = "/root/superbrain-sandbox/superbrain-subnet";
+const PYTHON   = "/root/superbrain-subnet/venv/bin/python";
+const CWD      = "/root/superbrain-subnet";
 const NETUID   = "442";
 const NETWORK  = "test";
 

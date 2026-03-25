@@ -6,6 +6,7 @@ exec /root/superbrain-subnet/venv/bin/python neurons/miner.py \
   --subtensor.network test \
   --wallet.name sb_miner \
   --wallet.hotkey default \
+  --axon.external_ip 46.225.114.202 \
   --lan-sync \
   --lan-port 8384 \
   --logging.debug
