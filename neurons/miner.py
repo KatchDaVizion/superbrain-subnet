@@ -169,7 +169,7 @@ Answer (cite with [1], [2], etc.):"""
                     "stream": False,
                     "options": {"temperature": 0.3, "num_predict": 256, "num_ctx": 1024},
                 },
-                timeout=3,
+                timeout=8,
             )
             if resp.status_code == 200:
                 answer = resp.json().get("response", "").strip()
