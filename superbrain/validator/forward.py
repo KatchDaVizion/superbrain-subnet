@@ -199,8 +199,8 @@ async def forward(self):
         return
 
     # 2. Select query source
-    # 20% chance of challenge query for anti-gaming (always from static KB)
-    is_challenge = random.random() < 0.2
+    # 5% chance of challenge query for anti-gaming (always from static KB)
+    is_challenge = random.random() < 0.05
     use_dynamic = False
 
     if is_challenge and CHALLENGE_QUERIES:
