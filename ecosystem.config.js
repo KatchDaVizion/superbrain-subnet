@@ -23,7 +23,7 @@ module.exports = {
     {
       name: "superbrain-validator",
       script: PYTHON,
-      args: "neurons/validator.py --netuid 442 --subtensor.network test --wallet.name sb_validator --wallet.hotkey default --logging.debug",
+      args: "neurons/validator.py --netuid 442 --subtensor.network test --wallet.name sb_validator --wallet.hotkey default --axon.port 8092 --axon.external_ip 46.225.114.202 --neuron.vpermit_tao_limit 1000000 --logging.debug",
       cwd: CWD,
       interpreter: "none",
       autorestart: true,
