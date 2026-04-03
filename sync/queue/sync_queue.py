@@ -28,7 +28,7 @@ class SyncQueue:
     def __init__(self, db_path: str = "sync_queue.db"):
         self.db_path = db_path
         self._lock = threading.Lock()
-        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        self.conn = sqlite3.connect(db_path, check_same_thread=False, timeout=30, isolation_level=None)
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA foreign_keys=ON")
         self._init_db()
@@ -125,7 +125,9 @@ class SyncQueue:
                    LIMIT ?""",
                 (limit,),
             )
-            return [self._row_to_chunk(row) for row in cursor.fetchall()]
+            result = [self._row_to_chunk(row) for row in cursor.fetchall()]
+            self.conn.commit()  # release implicit read transaction
+            return result
 
     def mark_synced(self, content_hash: str, peer_node_id: str) -> None:
         """Record that a chunk was synced to a specific peer."""
@@ -158,6 +160,7 @@ class SyncQueue:
             cursor = self.conn.execute("SELECT MAX(synced_at) FROM sync_log")
             row = cursor.fetchone()
             last_sync = row[0] if row and row[0] else 0.0
+            self.conn.commit()  # release implicit read transaction
 
         return SyncManifest(
             node_id=node_id,
