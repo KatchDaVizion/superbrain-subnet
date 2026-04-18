@@ -56,3 +56,6 @@ reference-repos/
 
 # Claude Code
 .claude/
+
+# Live SQLite database (runtime state, never commit)
+data/*.db*
