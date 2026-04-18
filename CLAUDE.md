@@ -250,7 +250,7 @@ venv/bin/python tests/test_integration.py
 | Repo | Purpose |
 |------|---------|
 | `KatchDaVizion/superbrain-pool` | SN65 mainnet mining pool (UID 190, WireGuard, 253 peers) |
-| `KatchDaVizion/superbrain-desktop-work` | Electron + React desktop app |
+| `KatchDaVizion/superbrain-sandbox-mempalace` | Electron + React desktop app |
 | `KatchDaVizion/superbrain-dev` | Dev sandbox |
 
 ---
