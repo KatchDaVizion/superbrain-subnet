@@ -266,7 +266,7 @@ This is a working prototype. We're transparent about what's done and what isn't:
 |--------|--------|------|
 | **Testnet Subnet (SN442)** | Running | This repo |
 | **Mainnet Mining Pool (SN65)** | Live, UID 190 | [superbrain-pool](https://github.com/KatchDaVizion/superbrain-pool) (private) |
-| **Desktop App** | UI ready (demo data) | [superbrain-desktop-work](https://github.com/KatchDaVizion/superbrain-desktop-work) |
+| **Desktop App** | UI ready (demo data) | [superbrain-sandbox-mempalace](https://github.com/KatchDaVizion/superbrain-sandbox-mempalace) |
 | **Dev Sandbox** | 677 assertions | [superbrain-dev](https://github.com/KatchDaVizion/superbrain-dev) (private) |
 
 ## Author
