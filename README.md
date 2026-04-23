@@ -265,9 +265,10 @@ This is a working prototype. We're transparent about what's done and what isn't:
 | System | Status | Link |
 |--------|--------|------|
 | **Testnet Subnet (SN442)** | Running | This repo |
-| **Mainnet Mining Pool (SN65)** | Live, UID 190 | [superbrain-pool](https://github.com/KatchDaVizion/superbrain-pool) (private) |
+| **Mainnet Mining Pool (SN65)** | Live, UID 190 | On-chain |
 | **Desktop App** | UI ready (demo data) | [superbrain-sandbox-mempalace](https://github.com/KatchDaVizion/superbrain-sandbox-mempalace) |
-| **Dev Sandbox** | 677 assertions | [superbrain-dev](https://github.com/KatchDaVizion/superbrain-dev) (private) |
+| **CLI** | Released | [superbrain-cli](https://github.com/KatchDaVizion/superbrain-cli) |
+| **SDK** | Published | [superbrain-sdk](https://github.com/KatchDaVizion/superbrain-sdk) |
 
 ## Author
 
