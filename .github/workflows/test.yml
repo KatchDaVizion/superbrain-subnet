@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -43,8 +44,8 @@ jobs:
       - name: Collect all tests (syntax/import sanity)
         run: pytest tests/unit --collect-only -q
 
-      - name: Run unit tests (excludes test_network_rag — 3 known failures post-refactor)
+      - name: Run unit tests (full suite, all 298)
         env:
           PYTHONDONTWRITEBYTECODE: "1"
           PYTHONUNBUFFERED: "1"
-        run: pytest tests/unit --ignore=tests/unit/test_network_rag.py -v --tb=short
+        run: pytest tests/unit -v --tb=short
