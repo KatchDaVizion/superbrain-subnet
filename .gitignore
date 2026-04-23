@@ -59,3 +59,8 @@ reference-repos/
 
 # Live SQLite database (runtime state, never commit)
 data/*.db*
+
+# Sibling repos cloned inside this directory (superbrain-demo, superbrain-routing)
+# These are separate repos, not submodules — never commit them here
+superbrain-demo/
+superbrain-routing/
