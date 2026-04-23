@@ -1,5 +1,7 @@
 # SuperBrain — Local-First Anonymous Knowledge Network on Bittensor
 
+[![Tests](https://github.com/KatchDaVizion/superbrain-subnet/actions/workflows/test.yml/badge.svg?branch=main)](https://github.com/KatchDaVizion/superbrain-subnet/actions/workflows/test.yml?query=branch%3Amain)
+
 **Working Prototype | Bittensor Subnet Ideathon 2026 | by Lys-David Louis-Charles (KatchDaVizion)**
 
 SuperBrain is a working prototype for a decentralized knowledge network where your data stays private by default and public by choice. Users run local AI (Ollama + Qdrant) for private RAG, then optionally share knowledge chunks to a network-wide pool — incentivized by Bittensor's TAO mining rewards. Three sync transports (LAN, Bluetooth, I2P) keep knowledge alive even without internet.
