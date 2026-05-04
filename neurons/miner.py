@@ -129,10 +129,15 @@ class Miner(BaseMinerNeuron):
         """Process RAGSynapse: generate a cited answer from query + chunks."""
         bt.logging.info(f"Query: {synapse.query[:80]}...")
 
+        # Extractive runs first — guaranteed citations and high S score baseline.
+        # Ollama synthesis runs on top; we keep it only if it produces valid citations.
+        ext_response, ext_citations = self._generate_extractive(synapse)
+
+        response, citations = ext_response, ext_citations
         if self.ollama_model:
-            response, citations = self._generate_ollama(synapse)
-        else:
-            response, citations = self._generate_extractive(synapse)
+            oll_response, oll_citations = self._generate_ollama(synapse)
+            if oll_citations:
+                response, citations = oll_response, oll_citations
 
         synapse.response = response
         synapse.citations = citations
@@ -142,23 +147,25 @@ class Miner(BaseMinerNeuron):
         return synapse
 
     def _generate_ollama(self, synapse):
-        """Generate response using local Ollama LLM."""
+        """Ollama synthesis: low-temp, verbatim-quote prompt, falls back silently."""
         import requests as req
 
         chunks_text = ""
-        for i, (chunk, source) in enumerate(zip(synapse.context_chunks, synapse.chunk_sources)):
-            chunks_text += f"\n[{i+1}] (Source: {source})\n{chunk}\n"
+        for i, chunk in enumerate(synapse.context_chunks):
+            chunks_text += f"\n[{i+1}] {chunk}\n"
 
-        prompt = f"""You are a knowledgeable assistant. Answer using ONLY the provided sources.
-Cite sources with [1], [2] markers. If sources don't contain enough info, say so.
+        prompt = f"""Answer the question using ONLY the sources below.
+Rules:
+- Copy key phrases verbatim from the sources.
+- Every sentence must end with a citation marker like [1], [2], or [3].
+- Do not add information not present in the sources.
 
-=== SOURCES ===
+Sources:
 {chunks_text}
-=== END SOURCES ===
 
 Question: {synapse.query}
 
-Answer (cite with [1], [2], etc.):"""
+Answer (2-3 sentences, every claim cited with [1] [2] or [3]):"""
 
         try:
             resp = req.post(
@@ -167,41 +174,47 @@ Answer (cite with [1], [2], etc.):"""
                     "model": self.ollama_model,
                     "prompt": prompt,
                     "stream": False,
-                    "options": {"temperature": 0.3, "num_predict": 256, "num_ctx": 1024},
+                    "options": {"temperature": 0.1, "num_predict": 200, "num_ctx": 768},
                 },
-                timeout=30,
+                timeout=25,
             )
             if resp.status_code == 200:
                 answer = resp.json().get("response", "").strip()
                 citations = self._extract_citations(answer, len(synapse.context_chunks))
                 return answer, citations
         except Exception as e:
-            bt.logging.error(f"Ollama failed: {e}")
-        return self._generate_extractive(synapse)
+            bt.logging.debug(f"Ollama failed: {e}")
+        return "", []
 
     def _generate_extractive(self, synapse):
-        """Keyword-based extractive fallback when Ollama is unavailable."""
+        """Extractive primary: quotes top sentences from every provided chunk.
+
+        Scores each sentence by query-word overlap, picks the best two per chunk,
+        and formats them with citation markers. Guarantees citations from all
+        provided chunks and maximises semantic similarity to the source material.
+        """
         if not synapse.context_chunks:
             return "No source documents provided.", []
 
         query_words = set(synapse.query.lower().split())
-        scored = []
-        for i, chunk in enumerate(synapse.context_chunks):
-            overlap = len(query_words & set(chunk.lower().split()))
-            scored.append((overlap, i))
-        scored.sort(reverse=True)
-        top = [idx for _, idx in scored[:2] if _ > 0] or [0]
-
         parts = []
-        for idx in top:
-            src = synapse.chunk_sources[idx] if idx < len(synapse.chunk_sources) else "unknown"
-            sentences = synapse.context_chunks[idx].split(". ")
-            excerpt = ". ".join(sentences[:2])
+        citations = []
+
+        for i, chunk in enumerate(synapse.context_chunks):
+            sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', chunk) if len(s.strip()) > 20]
+            if not sentences:
+                sentences = [chunk[:400]]
+
+            # Pick top 2 sentences by query-word overlap
+            scored = sorted(sentences, key=lambda s: len(query_words & set(s.lower().split())), reverse=True)
+            excerpt = " ".join(scored[:2])
             if not excerpt.endswith("."):
                 excerpt += "."
-            parts.append(f"According to the sources [{idx+1}], {excerpt}")
 
-        return " ".join(parts), top
+            parts.append(f"[{i+1}] {excerpt}")
+            citations.append(i)
+
+        return " ".join(parts), citations
 
     def _extract_citations(self, text, max_chunks):
         """Extract [1], [2] citation markers from generated text."""
