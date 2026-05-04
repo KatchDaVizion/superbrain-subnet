@@ -131,16 +131,40 @@ async def _sam_handshake(sock) -> None:
         raise SAMError(f"SAM HELLO failed: {response}")
 
 
-async def _sam_create_session(sock, session_id: str) -> str:
+async def _sam_dest_generate(sock) -> tuple:
+    """Generate a persistent I2P keypair via SAM. Returns (priv_b64, pub_b64).
+
+    Sends:   DEST GENERATE SIGNATURE_TYPE=ED_DSA_SHA512_ED25519
+    Expects: DEST REPLY PUB=<pub> PRIV=<priv>
+    """
+    loop = asyncio.get_event_loop()
+
+    def _do():
+        sock.send(b"DEST GENERATE SIGNATURE_TYPE=ED_DSA_SHA512_ED25519\n")
+        return _recv_line(sock)
+
+    response = await loop.run_in_executor(None, _do)
+    pub = priv = None
+    for part in response.split():
+        if part.startswith("PUB="):
+            pub = part[4:]
+        elif part.startswith("PRIV="):
+            priv = part[5:]
+    if not priv or not pub:
+        raise SAMError(f"SAM DEST GENERATE failed: {response}")
+    return priv, pub
+
+
+async def _sam_create_session(sock, session_id: str, destination: str = "TRANSIENT") -> str:
     """Create a SAM stream session, return the local destination (base64).
 
-    Sends:   SESSION CREATE STYLE=STREAM ID=<id> DESTINATION=TRANSIENT
+    Sends:   SESSION CREATE STYLE=STREAM ID=<id> DESTINATION=<key|TRANSIENT>
     Expects: SESSION STATUS RESULT=OK DESTINATION=<base64>
     """
     loop = asyncio.get_event_loop()
 
     def _do():
-        cmd = f"SESSION CREATE STYLE=STREAM ID={session_id} DESTINATION=TRANSIENT\n"
+        cmd = f"SESSION CREATE STYLE=STREAM ID={session_id} DESTINATION={destination}\n"
         sock.send(cmd.encode('ascii'))
         return _recv_line(sock)
 

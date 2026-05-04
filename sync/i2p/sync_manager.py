@@ -57,6 +57,7 @@ class I2PSyncManager:
         address_book_path: Optional[str] = None,
         mock_connect=None,
         _server_socket_factory=None,
+        key_path: Optional[str] = None,
     ):
         if private_key is None or public_key is None:
             private_key, public_key = generate_node_keypair()
@@ -90,6 +91,7 @@ class I2PSyncManager:
             node_id=node_id,
             private_key=private_key,
             _socket_factory=_server_socket_factory,
+            key_path=key_path,
         )
 
     async def start(self) -> None:

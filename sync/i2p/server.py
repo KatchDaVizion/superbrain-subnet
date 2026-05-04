@@ -10,6 +10,7 @@
 
 import asyncio
 import logging
+import os
 import uuid
 from typing import Optional
 
@@ -17,7 +18,7 @@ from sync.protocol.delta_sync import run_sync
 from sync.queue.sync_queue import SyncQueue
 from sync.i2p.transport import (
     I2PTransport, SAMError, _recv_line,
-    _sam_handshake, _sam_create_session,
+    _sam_handshake, _sam_create_session, _sam_dest_generate,
     DEFAULT_SAM_HOST, DEFAULT_SAM_PORT,
 )
 
@@ -35,6 +36,7 @@ class I2PSyncServer:
         sam_host: str = DEFAULT_SAM_HOST,
         sam_port: int = DEFAULT_SAM_PORT,
         _socket_factory=None,
+        key_path: Optional[str] = None,
     ):
         self._queue = sync_queue
         self._node_id = node_id
@@ -42,6 +44,7 @@ class I2PSyncServer:
         self._sam_host = sam_host
         self._sam_port = sam_port
         self._socket_factory = _socket_factory
+        self._key_path = key_path
         self._running = False
         self._session_id: Optional[str] = None
         self._local_destination: Optional[str] = None
@@ -65,12 +68,41 @@ class I2PSyncServer:
                 return s
             self._control_sock = await loop.run_in_executor(None, _open)
 
-        # SAM handshake + session creation
+        # SAM handshake
         self._session_id = f"superbrain-server-{uuid.uuid4().hex[:8]}"
         await _sam_handshake(self._control_sock)
+
+        # Persistent I2P identity: load key file or generate + save
+        destination = "TRANSIENT"
+        if self._key_path:
+            if os.path.exists(self._key_path):
+                with open(self._key_path, 'r') as _f:
+                    for _line in _f:
+                        if _line.startswith("PRIV="):
+                            destination = _line.strip()[5:]
+                            break
+                logger.debug(f"Loaded persistent I2P key from {self._key_path}")
+            else:
+                priv, pub = await _sam_dest_generate(self._control_sock)
+                os.makedirs(os.path.dirname(os.path.abspath(self._key_path)), exist_ok=True)
+                with open(self._key_path, 'w') as _f:
+                    _f.write(f"PRIV={priv}\n")
+                destination = priv
+                logger.info(f"Generated new persistent I2P key → {self._key_path}")
+
         self._local_destination = await _sam_create_session(
-            self._control_sock, self._session_id,
+            self._control_sock, self._session_id, destination=destination,
         )
+
+        # Save public destination alongside private key on first generation
+        if self._key_path and destination != "TRANSIENT":
+            lines = []
+            if os.path.exists(self._key_path):
+                with open(self._key_path, 'r') as _f:
+                    lines = _f.readlines()
+            if not any(l.startswith("DEST=") for l in lines):
+                with open(self._key_path, 'a') as _f:
+                    _f.write(f"DEST={self._local_destination}\n")
 
         self._running = True
         self._accept_task = asyncio.create_task(self._accept_loop())
