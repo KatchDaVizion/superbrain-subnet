@@ -131,6 +131,11 @@ class I2PSyncServer:
         return self._local_destination
 
     @property
+    def session_id(self) -> Optional[str]:
+        """The SAM session ID, available after start()."""
+        return self._session_id
+
+    @property
     def active_syncs(self) -> int:
         return self._active_syncs
 

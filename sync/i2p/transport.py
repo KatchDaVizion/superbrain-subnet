@@ -40,8 +40,9 @@ class I2PTransport(TransportLayer):
       receive: read 4-byte length, then read exactly that many bytes
     """
 
-    def __init__(self, sock, name: str = "i2p"):
+    def __init__(self, sock, name: str = "i2p", _session_sock=None):
         self._sock = sock
+        self._session_sock = _session_sock  # kept alive to hold the SAM session
         self.name = name
         self.closed = False
         self.bytes_sent = 0
@@ -99,6 +100,11 @@ class I2PTransport(TransportLayer):
                 await loop.run_in_executor(None, self._sock.close)
             except Exception:
                 pass
+            if self._session_sock:
+                try:
+                    await loop.run_in_executor(None, self._session_sock.close)
+                except Exception:
+                    pass
 
 
 # ── SAM protocol helpers ────────────────────────────────────────
@@ -204,32 +210,53 @@ async def connect_to_destination(
     sam_port: int = DEFAULT_SAM_PORT,
     name: str = "",
     _socket_factory=None,
+    session_id: Optional[str] = None,
 ) -> I2PTransport:
     """Connect to an I2P peer via the SAM bridge.
 
-    1. Opens TCP connection to SAM bridge
-    2. HELLO handshake
-    3. Creates transient session
-    4. STREAM CONNECT to destination
-    5. Returns I2PTransport wrapping the now-raw-stream socket
+    SAM requires STREAM CONNECT on a fresh socket (type=Unknown), not on the
+    SESSION CREATE socket (type=Session).  Two modes:
+
+    session_id provided (preferred): reuse an existing session.
+      1. Fresh socket → HELLO → STREAM CONNECT ID=session_id → raw stream.
+
+    session_id=None (standalone): create a new transient session.
+      1. Socket C1 → HELLO → SESSION CREATE TRANSIENT → session owned by C1.
+      2. Socket C2 → HELLO → STREAM CONNECT ID=new_id → raw stream.
+      C1 is kept alive inside the transport so the session stays valid.
     """
     import socket as socket_mod
 
     loop = asyncio.get_event_loop()
 
-    if _socket_factory:
-        sock = _socket_factory()
-    else:
-        def _open():
-            s = socket_mod.socket(socket_mod.AF_INET, socket_mod.SOCK_STREAM)
-            s.connect((sam_host, sam_port))
-            return s
-        sock = await loop.run_in_executor(None, _open)
+    def _open_sock():
+        s = socket_mod.socket(socket_mod.AF_INET, socket_mod.SOCK_STREAM)
+        s.connect((sam_host, sam_port))
+        return s
 
-    session_id = f"superbrain-{uuid.uuid4().hex[:8]}"
+    def _make_sock():
+        if _socket_factory:
+            return _socket_factory()
+        return _open_sock()
 
-    await _sam_handshake(sock)
-    await _sam_create_session(sock, session_id)
-    await _sam_stream_connect(sock, session_id, destination)
+    if session_id is not None:
+        # Reuse existing session: fresh socket → HELLO → STREAM CONNECT
+        stream_sock = await loop.run_in_executor(None, _make_sock)
+        await _sam_handshake(stream_sock)
+        await _sam_stream_connect(stream_sock, session_id, destination)
+        return I2PTransport(stream_sock, name=name or f"i2p->{destination[:16]}...")
 
-    return I2PTransport(sock, name=name or f"i2p->{destination[:16]}...")
+    # Standalone: C1 owns the session, C2 carries the stream
+    session_sock = await loop.run_in_executor(None, _make_sock)
+    new_sid = f"superbrain-{uuid.uuid4().hex[:8]}"
+    await _sam_handshake(session_sock)
+    await _sam_create_session(session_sock, new_sid)
+
+    stream_sock = await loop.run_in_executor(None, _make_sock)
+    await _sam_handshake(stream_sock)
+    await _sam_stream_connect(stream_sock, new_sid, destination)
+    return I2PTransport(
+        stream_sock,
+        name=name or f"i2p->{destination[:16]}...",
+        _session_sock=session_sock,
+    )

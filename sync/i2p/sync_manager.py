@@ -124,7 +124,9 @@ class I2PSyncManager:
         transport = None
         try:
             transport = await self._connect_fn(
-                peer.destination, name=peer.name,
+                peer.destination,
+                name=peer.name,
+                session_id=self._server.session_id,
             )
 
             result = await run_sync(
