@@ -596,7 +596,7 @@ def test_i2p_sync_manager():
         queue_a.add_to_queue(c1)
         queue_a.add_to_queue(c2)
 
-        async def mock_connect(destination, name=""):
+        async def mock_connect(destination, name="", session_id=None):
             sock_a_local, sock_b_local = create_mock_i2p_pair("server", "client")
 
             # Start server-side run_sync as background task
@@ -670,7 +670,7 @@ def test_rate_limiting():
         c = make_chunk("Rate limit test I2P")
         queue_a.add_to_queue(c)
 
-        async def mock_connect(destination, name=""):
+        async def mock_connect(destination, name="", session_id=None):
             sa, sb = create_mock_i2p_pair()
             ta = I2PTransport(sa, name="server")
             asyncio.create_task(run_sync(queue_a, "rate-A", priv_a, b"", ta))

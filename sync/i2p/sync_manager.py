@@ -153,12 +153,20 @@ class I2PSyncManager:
             return result
 
         except Exception as e:
+            err_str = str(e)
+            if "INVALID_ID" in err_str:
+                # SAM session was dropped by i2pd between session creation and
+                # this outbound connect — recreate so the next sync attempt works
+                try:
+                    await self._server._restart_session()
+                except Exception as restart_err:
+                    logger.error(f"SAM session restart failed: {restart_err}")
             logger.warning(f"I2P sync failed with {peer.destination[:16]}...: {e}")
             if peer.destination not in self._sync_records:
                 self._sync_records[peer.destination] = SyncRecord(
                     peer_destination=peer.destination,
                 )
-            self._sync_records[peer.destination].last_error = str(e)
+            self._sync_records[peer.destination].last_error = err_str
             return None
         finally:
             if transport and not transport.closed:

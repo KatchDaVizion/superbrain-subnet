@@ -7,6 +7,11 @@
 # The server creates one SAM session on start(), then repeatedly issues
 # STREAM ACCEPT on new TCP connections (reusing the session ID).
 # Each accepted connection becomes a raw byte stream to the remote peer.
+#
+# Session recovery: i2pd drops the SAM session when its control socket
+# goes idle (no keepalive, firewall TCP-idle timeout, or i2pd restart).
+# _restart_session() recreates the session in-place so the accept loop
+# and outbound syncs automatically pick up the new session ID.
 
 import asyncio
 import logging
@@ -51,24 +56,40 @@ class I2PSyncServer:
         self._control_sock = None
         self._accept_task: Optional[asyncio.Task] = None
         self._active_syncs = 0
+        self._restart_lock = asyncio.Lock()
 
-    async def start(self) -> None:
-        """Start the I2P server: create SAM session, begin accepting."""
+    # ── Session lifecycle ────────────────────────────────────────────
+
+    async def _create_session(self) -> None:
+        """Open (or reopen) a SAM control socket and create a session.
+
+        Sets self._session_id and self._local_destination.
+        Closes any existing control socket first.
+        """
         import socket as socket_mod
 
         loop = asyncio.get_event_loop()
 
-        # Open control connection to SAM bridge
+        # Close stale control socket; i2pd drops the session when it closes
+        if self._control_sock:
+            try:
+                await loop.run_in_executor(None, self._control_sock.close)
+            except Exception:
+                pass
+            self._control_sock = None
+
+        # New control connection with TCP keepalive so the session survives
+        # firewall idle-timeout between sync rounds
         if self._socket_factory:
             self._control_sock = self._socket_factory()
         else:
             def _open():
                 s = socket_mod.socket(socket_mod.AF_INET, socket_mod.SOCK_STREAM)
+                s.setsockopt(socket_mod.SOL_SOCKET, socket_mod.SO_KEEPALIVE, 1)
                 s.connect((self._sam_host, self._sam_port))
                 return s
             self._control_sock = await loop.run_in_executor(None, _open)
 
-        # SAM handshake
         self._session_id = f"superbrain-server-{uuid.uuid4().hex[:8]}"
         await _sam_handshake(self._control_sock)
 
@@ -104,6 +125,35 @@ class I2PSyncServer:
                 with open(self._key_path, 'a') as _f:
                     _f.write(f"DEST={self._local_destination}\n")
 
+    async def _restart_session(self) -> None:
+        """Recreate the SAM session after i2pd has dropped it.
+
+        Serialised by _restart_lock so concurrent INVALID_ID detections
+        (from the accept loop and outbound sync) don't double-recreate.
+        If a restart is already in progress the second caller simply waits
+        for it to finish and returns — the session will already be fresh.
+        """
+        if self._restart_lock.locked():
+            # Another coroutine is already restarting; wait for it
+            async with self._restart_lock:
+                return
+        async with self._restart_lock:
+            logger.warning("SAM session dropped by i2pd — recreating session")
+            try:
+                await self._create_session()
+                logger.info(
+                    f"SAM session recreated: sid={self._session_id} "
+                    f"dest={self._local_destination[:32]}..."
+                )
+            except Exception as e:
+                logger.error(f"SAM session recreate failed: {e}")
+                raise
+
+    # ── Public API ───────────────────────────────────────────────────
+
+    async def start(self) -> None:
+        """Start the I2P server: create SAM session, begin accepting."""
+        await self._create_session()
         self._running = True
         self._accept_task = asyncio.create_task(self._accept_loop())
         logger.info(f"I2P sync server started: {self._local_destination[:32]}...")
@@ -138,6 +188,8 @@ class I2PSyncServer:
     @property
     def active_syncs(self) -> int:
         return self._active_syncs
+
+    # ── Accept loop ──────────────────────────────────────────────────
 
     async def _accept_loop(self) -> None:
         """Accept incoming SAM streams in a loop."""
@@ -182,9 +234,15 @@ class I2PSyncServer:
                         await loop.run_in_executor(None, accept_sock.close)
                     except Exception:
                         pass
-                    # "Already accepting" = another accept is pending; back off longer
                     if "Already accepting" in response:
+                        # Another accept is pending — back off
                         await asyncio.sleep(5)
+                    elif "INVALID_ID" in response:
+                        # Session was dropped by i2pd — recreate it
+                        try:
+                            await self._restart_session()
+                        except Exception:
+                            await asyncio.sleep(5)
                     else:
                         logger.warning(f"SAM STREAM ACCEPT failed: {response}")
                         await asyncio.sleep(2)
