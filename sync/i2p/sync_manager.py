@@ -123,10 +123,13 @@ class I2PSyncManager:
 
         transport = None
         try:
+            # Use standalone mode (session_id=None) so each outbound connection
+            # gets a fresh transient session with fresh tunnels.  Reusing the
+            # server session caused persistent CANT_REACH_PEER when that
+            # session's tunnels had poor floodfill coverage.
             transport = await self._connect_fn(
                 peer.destination,
                 name=peer.name,
-                session_id=self._server.session_id,
             )
 
             result = await run_sync(
