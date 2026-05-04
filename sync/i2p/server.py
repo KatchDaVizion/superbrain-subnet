@@ -141,13 +141,15 @@ class I2PSyncServer:
 
                 # Socket is now a raw stream to the remote peer
                 asyncio.create_task(self._handle_client(accept_sock))
+                # Yield to event loop so tasks can start before next accept
+                await asyncio.sleep(0)
 
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 if self._running:
-                    logger.error(f"I2P accept error: {e}")
-                    await asyncio.sleep(1)
+                    logger.warning(f"I2P accept error: {e}")
+                    await asyncio.sleep(2)
 
     async def _handle_client(self, sock) -> None:
         """Handle a single I2P sync connection."""
@@ -169,7 +171,11 @@ class I2PSyncServer:
                 f"errors={len(result.errors)}"
             )
         except Exception as e:
-            logger.error(f"I2P sync error: {e}")
+            err = str(e).lower()
+            if "closed" in err or "recv" in err or "eof" in err or "reset" in err:
+                logger.debug(f"I2P connection closed: {e}")
+            else:
+                logger.warning(f"I2P sync error: {e}")
         finally:
             self._active_syncs -= 1
             if transport and not transport.closed:

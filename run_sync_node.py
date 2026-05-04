@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SuperBrain LAN Sync Node — standalone peer for syncing knowledge chunks.
+"""SuperBrain LAN + I2P Sync Node — standalone peer for syncing knowledge chunks.
 
 Run this on a friend's machine (or a second terminal) to sync knowledge
 with a SuperBrain miner or another sync node on the same network.
@@ -16,6 +16,9 @@ Usage:
 
   # Add a custom knowledge chunk
   python3 run_sync_node.py --add "Bittensor subnets are specialized task networks."
+
+  # Disable I2P sync (LAN only)
+  python3 run_sync_node.py --seed --no-i2p
 """
 import argparse
 import asyncio
@@ -39,6 +42,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger("sb-node")
 
+# Helsinki I2P destination (resolved via SAM NAMING LOOKUP from .b32.i2p address)
+# ufogd25x4b67q75ypbhvamxsviv4lgsgb7i3of2bhnwgfyqiqo3a.b32.i2p
+HELSINKI_I2P_DEST = (
+    "B2CIY5wkADdipjUtaIPHaKTrj6WfbnBCr3pAQv29KYIHYIhjnCQAN2KmNS1og8dopOuPpZ9ucEKvek"
+    "BC~b0pggdgiGOcJAA3YqY1LWiDx2ik64-ln25wQq96QEL9vSmCB2CIY5wkADdipjUtaIPHaKTrj6Wf"
+    "bnBCr3pAQv29KYIHYIhjnCQAN2KmNS1og8dopOuPpZ9ucEKvekBC~b0pggdgiGOcJAA3YqY1LWiDx2"
+    "ik64-ln25wQq96QEL9vSmCB2CIY5wkADdipjUtaIPHaKTrj6WfbnBCr3pAQv29KYIHYIhjnCQAN2Km"
+    "NS1og8dopOuPpZ9ucEKvekBC~b0pggdgiGOcJAA3YqY1LWiDx2ik64-ln25wQq96QEL9vSmCB2CIY5"
+    "wkADdipjUtaIPHaKTrj6WfbnBCr3pAQv29KYIHYIhjnCQAN2KmNS1og8dopOuPpZ9ucEKvekBC~b0p"
+    "glWXkkPlnQ2bbYaW5W947U2RrX9rgO~SXek~c9kER4zjBQAEAAcAAA=="
+)
+
 SAMPLE_CHUNKS = [
     "Bittensor is a decentralized ML network. Miners contribute intelligence and earn TAO tokens.",
     "SuperBrain is a local-first knowledge network on Bittensor. Private by default, public by choice.",
@@ -53,14 +68,40 @@ SAMPLE_CHUNKS = [
 ]
 
 
+async def _start_i2p(queue, node_id, priv, pub):
+    """Start I2P sync manager. Returns manager or None if I2P is unavailable."""
+    try:
+        from sync.i2p.sync_manager import I2PSyncManager
+        i2p_queue = SyncQueue(db_path=queue.db_path)
+        mgr = I2PSyncManager(
+            sync_queue=i2p_queue,
+            node_id=node_id + "-i2p",
+            private_key=priv,
+            public_key=pub,
+            static_peers=[(HELSINKI_I2P_DEST, "helsinki")],
+            sync_interval=120,
+        )
+        await asyncio.wait_for(mgr.start(), timeout=30)
+        dest = mgr.local_destination or ""
+        logger.info(f"I2P sync started — local dest: {dest[:24]}... peers=1 (helsinki)")
+        return mgr
+    except asyncio.TimeoutError:
+        logger.warning("I2P sync disabled: SAM startup timed out after 30s (LAN sync unaffected)")
+        return None
+    except Exception as e:
+        logger.warning(f"I2P sync disabled: {e} (LAN sync unaffected)")
+        return None
+
+
 async def main():
-    parser = argparse.ArgumentParser(description="SuperBrain LAN Sync Node")
+    parser = argparse.ArgumentParser(description="SuperBrain LAN + I2P Sync Node")
     parser.add_argument("--seed", action="store_true", help="Add 10 sample knowledge chunks")
     parser.add_argument("--add", type=str, help="Add a custom knowledge chunk")
     parser.add_argument("--port", type=int, default=8385, help="Sync server port (default: 8385)")
     parser.add_argument("--static", type=str, help="Static peer IP:PORT (skip mDNS discovery)")
     parser.add_argument("--interval", type=int, default=10, help="Sync interval in seconds (default: 10)")
     parser.add_argument("--db", type=str, default=None, help="Path to SQLite database (default: temp dir)")
+    parser.add_argument("--no-i2p", action="store_true", help="Disable I2P sync (LAN only)")
     args = parser.parse_args()
 
     priv, pub = generate_node_keypair()
@@ -129,6 +170,12 @@ async def main():
     await mgr.start()
     m = queue.get_manifest(node_id)
     logger.info(f"NODE STARTED | id={node_id} port={args.port} chunks={len(m.chunk_hashes)}")
+
+    # I2P sync — optional, starts after LAN is confirmed up
+    i2p_mgr = None
+    if not args.no_i2p:
+        i2p_mgr = await _start_i2p(queue, node_id, priv, pub)
+
     logger.info("Waiting for peers... (Ctrl+C to stop)")
 
     while not stop.is_set():
@@ -140,8 +187,22 @@ async def main():
         logger.info(f"chunks={len(m.chunk_hashes)} peers={len(peers)} sent={sent} recv={recv}")
         for p in peers:
             logger.info(f"  peer: {p.node_id[:12]}... @ {p.host}:{p.port}")
+        if i2p_mgr:
+            stats = i2p_mgr.stats
+            dest = stats.get("local_destination") or ""
+            i2p_sent = sum(v["total_sent"] for v in stats["sync_records"].values())
+            i2p_recv = sum(v["total_received"] for v in stats["sync_records"].values())
+            logger.info(
+                f"  i2p: dest={dest[:16]}... peers={stats['peers_known']} "
+                f"sent={i2p_sent} recv={i2p_recv}"
+            )
 
     await mgr.stop()
+    if i2p_mgr:
+        try:
+            await asyncio.wait_for(i2p_mgr.stop(), timeout=10)
+        except Exception:
+            pass
     m = queue.get_manifest(node_id)
     logger.info(f"STOPPED | final chunks={len(m.chunk_hashes)}")
 
