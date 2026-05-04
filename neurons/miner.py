@@ -233,25 +233,18 @@ Answer (2-3 sentences, every claim cited with [1] [2] or [3]):"""
         known_set = set(synapse.known_hashes)
         max_chunks = synapse.max_chunks
 
-        # Get all public chunks from our queue
-        all_chunks = self.sync_queue.get_pending(limit=1000)
-        # Also include already-synced chunks
+        # Find which of our chunks the validator doesn't have yet
         manifest = self.sync_queue.get_manifest(node_id="miner")
-        all_hashes = list(manifest.chunk_hashes)
-        all_chunks_by_hash = {c.content_hash: c for c in all_chunks}
-        # Fetch any chunks not in pending
-        for h in all_hashes:
-            if h not in all_chunks_by_hash:
-                chunk = self.sync_queue.get_chunk(h)
-                if chunk:
-                    all_chunks_by_hash[h] = chunk
+        new_hashes = [h for h in manifest.chunk_hashes if h not in known_set]
 
-        # Filter: exclude chunks validator already has
-        new_chunks = [c for h, c in all_chunks_by_hash.items() if h not in known_set]
-        # Send newest content first to maximize freshness score
-        new_chunks.sort(key=lambda c: getattr(c, 'timestamp', 0) or 0, reverse=True)
-        # Limit
-        new_chunks = new_chunks[:max_chunks]
+        if not new_hashes:
+            bt.logging.info("Sync: no new chunks to send")
+            return synapse
+
+        # Batch-fetch candidates in a single SQL query, then sort newest-first
+        candidates = self.sync_queue.get_chunks_by_hashes(new_hashes[:max_chunks * 4])
+        candidates.sort(key=lambda c: getattr(c, 'timestamp', 0) or 0, reverse=True)
+        new_chunks = candidates[:max_chunks]
 
         if not new_chunks:
             bt.logging.info("Sync: no new chunks to send")
