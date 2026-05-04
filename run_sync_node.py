@@ -158,7 +158,7 @@ async def _start_i2p(queue, node_id, priv, pub, static_peers, key_path):
             sync_interval=120,
             key_path=key_path,
         )
-        await asyncio.wait_for(mgr.start(), timeout=45)
+        await asyncio.wait_for(mgr.start(), timeout=90)
         dest = mgr.local_destination or ""
         logger.info(
             f"I2P sync started — local dest: {dest[:32]}... "
@@ -167,7 +167,7 @@ async def _start_i2p(queue, node_id, priv, pub, static_peers, key_path):
         logger.info(f"I2P FULL DEST: {dest}")
         return mgr
     except asyncio.TimeoutError:
-        logger.warning("I2P sync disabled: SAM startup timed out after 45s (LAN sync unaffected)")
+        logger.warning("I2P sync disabled: SAM startup timed out after 90s (LAN sync unaffected)")
         return None
     except Exception as e:
         _msg = str(e)
