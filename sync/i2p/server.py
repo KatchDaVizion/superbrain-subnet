@@ -139,6 +139,15 @@ class I2PSyncServer:
                         pass
                     continue
 
+                # Back off if too many in-flight syncs (stale connection burst protection)
+                if self._active_syncs >= 3:
+                    try:
+                        await loop.run_in_executor(None, accept_sock.close)
+                    except Exception:
+                        pass
+                    await asyncio.sleep(1)
+                    continue
+
                 # Socket is now a raw stream to the remote peer
                 asyncio.create_task(self._handle_client(accept_sock))
                 # Yield to event loop so tasks can start before next accept
@@ -156,7 +165,7 @@ class I2PSyncServer:
         self._active_syncs += 1
         transport = None
         try:
-            logger.info(f"I2P sync connection (active: {self._active_syncs})")
+            logger.debug(f"I2P sync connection (active: {self._active_syncs})")
             transport = I2PTransport(sock, name="i2p-server<-peer")
             result = await run_sync(
                 self._queue,
