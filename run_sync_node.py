@@ -170,7 +170,15 @@ async def _start_i2p(queue, node_id, priv, pub, static_peers, key_path):
         logger.warning("I2P sync disabled: SAM startup timed out after 45s (LAN sync unaffected)")
         return None
     except Exception as e:
-        logger.warning(f"I2P sync disabled: {e} (LAN sync unaffected)")
+        _msg = str(e)
+        if "Connection refused" in _msg or "111" in _msg or "7656" in _msg:
+            logger.warning(
+                "I2P sync disabled: SAM not found on port 7656. "
+                "To join the I2P mesh: apt install i2pd && systemctl enable --now i2pd "
+                "(then restart this node). LAN sync is unaffected."
+            )
+        else:
+            logger.warning(f"I2P sync disabled: {e} (LAN sync unaffected)")
         return None
 
 

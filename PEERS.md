@@ -2,6 +2,12 @@
 
 Connect to the SuperBrain knowledge mesh over I2P — censorship-resistant, anonymous, always-on.
 
+> **Prerequisite:** I2P mesh sync requires a local i2pd router with SAM API enabled.
+> ```bash
+> apt install i2pd && systemctl enable --now i2pd
+> ```
+> If SAM is unreachable (port 7656), the node starts anyway with LAN sync only and logs install instructions.
+
 ## Quick start
 
 ```bash
