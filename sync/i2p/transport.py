@@ -110,13 +110,20 @@ class I2PTransport(TransportLayer):
 # ── SAM protocol helpers ────────────────────────────────────────
 
 def _recv_line(sock) -> str:
-    """Read a newline-terminated SAM response (blocking)."""
-    buf = b""
-    while not buf.endswith(b"\n"):
-        chunk = sock.recv(4096)
-        if not chunk:
+    """Read a newline-terminated SAM response (blocking).
+
+    Reads one byte at a time so we stop exactly at the first '\\n' and never
+    consume bytes that belong to the subsequent binary stream.  SAM control
+    lines are short (< 1 KB) so the per-byte overhead is negligible.
+    """
+    buf = bytearray()
+    while True:
+        byte = sock.recv(1)
+        if not byte:
             raise SAMError("SAM bridge closed connection")
-        buf += chunk
+        if byte == b"\n":
+            break
+        buf.extend(byte)
     return buf.decode('ascii').strip()
 
 
