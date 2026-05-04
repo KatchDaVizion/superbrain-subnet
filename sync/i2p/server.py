@@ -132,11 +132,16 @@ class I2PSyncServer:
                 response = await loop.run_in_executor(None, _do_accept)
 
                 if "RESULT=OK" not in response:
-                    logger.warning(f"SAM STREAM ACCEPT failed: {response}")
                     try:
                         await loop.run_in_executor(None, accept_sock.close)
                     except Exception:
                         pass
+                    # "Already accepting" = another accept is pending; back off longer
+                    if "Already accepting" in response:
+                        await asyncio.sleep(5)
+                    else:
+                        logger.warning(f"SAM STREAM ACCEPT failed: {response}")
+                        await asyncio.sleep(2)
                     continue
 
                 # Back off if too many in-flight syncs (stale connection burst protection)
