@@ -160,11 +160,20 @@ class I2PSyncServer:
                 # Handshake on the new connection
                 await _sam_handshake(accept_sock)
 
-                # Issue STREAM ACCEPT (blocks until a peer connects)
+                # Issue STREAM ACCEPT (blocks until a peer connects).
+                # After RESULT=OK, i2pd sends a second line: the peer's b64
+                # destination.  Read and discard it so the socket is a clean
+                # binary stream before passing it to I2PTransport.
                 def _do_accept():
                     cmd = f"STREAM ACCEPT ID={self._session_id}\n"
                     accept_sock.send(cmd.encode('ascii'))
-                    return _recv_line(accept_sock)
+                    status = _recv_line(accept_sock)
+                    if "RESULT=OK" in status:
+                        try:
+                            _recv_line(accept_sock)  # peer dest b64 — discard
+                        except Exception:
+                            pass
+                    return status
 
                 response = await loop.run_in_executor(None, _do_accept)
 
