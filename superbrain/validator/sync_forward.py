@@ -105,10 +105,11 @@ def _decode_and_validate_batch(batch_data_b64, known_hashes):
                 )
                 continue
         elif not chunk.signature:
-            bt.logging.warning(
-                f"Sync: REJECTING unsigned chunk {chunk.content_hash[:16]}..."
+            # Accept pre-Ed25519 content — same backward-compat policy as delta_sync.py
+            bt.logging.debug(
+                f"Sync: accepting unsigned chunk {chunk.content_hash[:16]}... "
+                f"(pre-Ed25519 content)"
             )
-            continue
 
         # Skip chunks we already have
         if chunk.content_hash in known_set:

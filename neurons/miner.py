@@ -235,6 +235,8 @@ Answer (cite with [1], [2], etc.):"""
 
         # Filter: exclude chunks validator already has
         new_chunks = [c for h, c in all_chunks_by_hash.items() if h not in known_set]
+        # Send newest content first to maximize freshness score
+        new_chunks.sort(key=lambda c: getattr(c, 'timestamp', 0) or 0, reverse=True)
         # Limit
         new_chunks = new_chunks[:max_chunks]
 
