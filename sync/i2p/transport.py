@@ -170,7 +170,11 @@ async def _sam_create_session(sock, session_id: str, destination: str = "TRANSIE
     loop = asyncio.get_event_loop()
 
     def _do():
-        cmd = f"SESSION CREATE STYLE=STREAM ID={session_id} DESTINATION={destination}\n"
+        cmd = (
+            f"SESSION CREATE STYLE=STREAM ID={session_id} DESTINATION={destination}"
+            " inbound.length=1 outbound.length=1"
+            " inbound.quantity=5 outbound.quantity=5\n"
+        )
         sock.send(cmd.encode('ascii'))
         return _recv_line(sock)
 
