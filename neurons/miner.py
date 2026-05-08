@@ -136,7 +136,7 @@ class Miner(BaseMinerNeuron):
         response, citations = ext_response, ext_citations
         if self.ollama_model:
             oll_response, oll_citations = self._generate_ollama(synapse)
-            if oll_citations:
+            if oll_citations and self._is_grounded(oll_response, synapse.context_chunks):
                 response, citations = oll_response, oll_citations
 
         synapse.response = response
@@ -225,6 +225,17 @@ Answer (2-3 sentences, every claim cited with [1] [2] or [3]):"""
             if 0 <= idx < max_chunks and idx not in citations:
                 citations.append(idx)
         return citations
+
+    def _is_grounded(self, response, context_chunks, threshold=0.35):
+        """Reject Ollama responses that share < threshold word overlap with context."""
+        if not response or not context_chunks:
+            return False
+        resp_words = set(response.lower().split())
+        ctx_words = set(" ".join(context_chunks).lower().split())
+        if not resp_words:
+            return False
+        return len(resp_words & ctx_words) / len(resp_words) >= threshold
+
 
     async def forward_sync(
         self, synapse: superbrain.protocol.KnowledgeSyncSynapse
