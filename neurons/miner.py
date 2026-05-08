@@ -99,6 +99,10 @@ class Miner(BaseMinerNeuron):
         else:
             bt.logging.warning("Ollama unavailable — extractive fallback active")
 
+        self.sentence_offset = 0
+        self.paraphrase_mode = False
+        self.grounding_threshold = 0.35
+
         # Node identity keypair (for signing chunks)
         self._node_private_key, self._node_public_key = generate_node_keypair()
 
@@ -136,7 +140,7 @@ class Miner(BaseMinerNeuron):
         response, citations = ext_response, ext_citations
         if self.ollama_model:
             oll_response, oll_citations = self._generate_ollama(synapse)
-            if oll_citations and self._is_grounded(oll_response, synapse.context_chunks):
+            if oll_citations and self._is_grounded(oll_response, synapse.context_chunks, threshold=self.grounding_threshold):
                 response, citations = oll_response, oll_citations
 
         synapse.response = response
@@ -154,9 +158,14 @@ class Miner(BaseMinerNeuron):
         for i, chunk in enumerate(synapse.context_chunks):
             chunks_text += f"\n[{i+1}] {chunk}\n"
 
+        style_rule = (
+            "- Rephrase the key information in your own words; avoid repeating exact phrases from the sources."
+            if self.paraphrase_mode else
+            "- Copy key phrases verbatim from the sources."
+        )
         prompt = f"""Answer the question using ONLY the sources below.
 Rules:
-- Copy key phrases verbatim from the sources.
+{style_rule}
 - Every sentence must end with a citation marker like [1], [2], or [3].
 - Do not add information not present in the sources.
 
@@ -205,9 +214,10 @@ Answer (2-3 sentences, every claim cited with [1] [2] or [3]):"""
             if not sentences:
                 sentences = [chunk[:400]]
 
-            # Pick top 2 sentences by query-word overlap
+            # Pick top 2 sentences by query-word overlap (offset lets secondary miners pick different sentences)
             scored = sorted(sentences, key=lambda s: len(query_words & set(s.lower().split())), reverse=True)
-            excerpt = " ".join(scored[:2])
+            start = min(self.sentence_offset, max(0, len(scored) - 1))
+            excerpt = " ".join(scored[start:start + 2]) or scored[0]
             if not excerpt.endswith("."):
                 excerpt += "."
 
@@ -401,6 +411,9 @@ if __name__ == "__main__":
     parser.add_argument("--lan-port", type=int, default=8384)
     parser.add_argument("--lan-static", type=str, default=None)
     parser.add_argument("--seed", action="store_true", default=False)
+    parser.add_argument("--sentence-offset", type=int, default=0)
+    parser.add_argument("--paraphrase-mode", action="store_true", default=False)
+    parser.add_argument("--grounding-threshold", type=float, default=0.35)
     lan_args, remaining = parser.parse_known_args()
 
     # Inject into sys.argv so bittensor only sees its own args
@@ -413,6 +426,9 @@ if __name__ == "__main__":
     miner.config.lan_port = lan_args.lan_port
     miner.config.lan_static = lan_args.lan_static
     miner.config.seed = lan_args.seed
+    miner.sentence_offset = lan_args.sentence_offset
+    miner.paraphrase_mode = lan_args.paraphrase_mode
+    miner.grounding_threshold = lan_args.grounding_threshold
 
     # Start LAN sync if requested (after config is set)
     if lan_args.lan_sync:
